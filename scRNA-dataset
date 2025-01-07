@@ -1,0 +1,193 @@
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(Seurat)
+library(stringr)
+library(ggplot2)
+library(ggpubr)
+library(pals)
+library(gplots)
+library(RColorBrewer)
+library(tidyverse)
+library(ComplexHeatmap)
+library(patchwork)
+library(magick)
+library(ggimage)
+
+devtools::load_all("C:\\Program Files\\R\\R-4.3.2\\monocle")
+
+
+# load dataset
+cell_annotation = read.table(gzfile("input/GSE131907_Lung_Cancer_cell_annotation.txt.gz"), sep = "\t", header = TRUE)
+feature_summary = read.csv("input/GSE131907_Lung_Cancer_Feature_Summary-modify.csv", row.names = 1)
+
+annotation = merge(cell_annotation, feature_summary, by.x = "Sample", by.y = "Samples")
+rownames(annotation) = annotation$Index
+
+annotation$rename.Tissue.origins = annotation$Tissue.origins
+annotation[annotation$rename.Tissue.origins == "tL/B", ]$rename.Tissue.origins  = "Late-Stage"
+annotation[annotation$rename.Tissue.origins == "tLung", ]$rename.Tissue.origins = "Early-Stage"
+annotation[annotation$rename.Tissue.origins == "nLung", ]$rename.Tissue.origins = "Normal-Stage"
+
+raw_data = readRDS("input/GSE131907_Lung_Cancer_raw_UMI_matrix.rds")
+ref_genome = readRDS("input/refgenome_example.Rds")
+
+# Lung tissue subset
+lung_tissue_seu = CreateSeuratObject(counts = raw_data, meta.data = annotation, min.cells = 0.001 * ncol(raw_data)) 
+lung_tissue_seu = subset(lung_tissue_seu, subset = Tissue.origins %in% c("nLung", "tLung", "tL/B"))
+
+common_genes = intersect(rownames(lung_tissue_seu@assays$RNA$counts), rownames(ref_genome))
+lung_tissue_seu  = subset(lung_tissue_seu, features = common_genes)
+
+## Lung tissue subset QC visualization 
+lung_tissue_seu[["percent.mt"]] = PercentageFeatureSet(lung_tissue_seu, pattern = "^MT-")
+VlnPlot(lung_tissue_seu, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size=0) 
+lung_tissue_seu = subset(lung_tissue_seu, subset = nFeature_RNA > 200 & nFeature_RNA < 5000 & percent.mt < 20)
+VlnPlot(lung_tissue_seu, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size=0) 
+lung_tissue_seu = NormalizeData(lung_tissue_seu, normalization.method = "LogNormalize", scale.factor = 1e4)
+lung_tissue_seu <- FindVariableFeatures(lung_tissue_seu, selection.method = "vst", nfeatures = 3000)
+lung_tissue_seu = ScaleData(lung_tissue_seu, do.scale = FALSE, do.center = TRUE, scale.max = 10)
+lung_tissue_seu = RunPCA(lung_tissue_seu, features = VariableFeatures(object = lung_tissue_seu))
+ElbowPlot(lung_tissue_seu)
+lung_tissue_seu <- FindNeighbors(lung_tissue_seu, reduction = "pca", dims = 1:20)
+lung_tissue_seu <- FindClusters(lung_tissue_seu, resolution = 0.2) 
+lung_tissue_seu <- RunUMAP(lung_tissue_seu, reduction = "pca", dims = 1:20)
+DimPlot(lung_tissue_seu, reduction = "umap", label = T)
+DimPlot(lung_tissue_seu, reduction = "umap", group.by = "Cell_type", label = T)
+DimPlot(lung_tissue_seu, reduction = "umap", group.by = "Tissue.origins", label = T)
+
+
+# CNV
+source("SingleCell-master/R/calInferredCNA_for_CEP.R") ## calculate inferredCNV value
+source("SingleCell-master/R/makingTCIDEA_for_CEP.R") ## make TCIDEA object
+source("SingleCell-master/R/TCIDEA_obj_for_CEP.R") ## initiate TCIDEA object
+source("SingleCell-master/R/calCNVScore_for_CEP.R") ## calculate CNV score (MS, Corr) with CEP result
+
+normal_subset = subset(lung_tissue_seu, subset = Tissue.origins == "nLung")
+tumor_subset = subset(lung_tissue_seu, subset = Tissue.origins %in% c("tLung", "tL/B"))
+
+normal_expression = as.matrix(normal_subset@assays$RNA$counts)
+normal_annotation = normal_subset@meta.data
+normal_annotation_subset = normal_annotation[, c("Index", "Cell_type")]
+names(normal_annotation_subset) <- c("Index", "celltype")
+rownames(normal_annotation_subset) <- normal_annotation_subset$Index
+
+tumor_expression = as.data.frame(tumor_subset@assays$RNA$counts)
+tumor_annotation = tumor_subset@meta.data
+tumor_annotation_subset = tumor_annotation[, c("Index", "Cell_type")]
+names(tumor_annotation_subset) <- c("Index", "celltype")
+rownames(tumor_annotation_subset) <- tumor_annotation_subset$Index
+
+output.dir = paste0(getwd(), "/", "GSE131907_CNV_result")
+EP_cutoff = 20 ## count if > 20% of EP -> add
+target.celltypes = "Epithelial cells" ## declare name of epithelial cells in metadata
+label = "GSE131907_CNV_result"
+prop <- as.data.frame(table(tumor_annotation_subset$celltype))
+prop$Percent = prop$Freq / nrow(tumor_annotation_subset) * 100
+
+if(prop[prop$Var1 %in% target.celltypes,]$Percent > EP_cutoff){
+  list <- addNormalDataset(tumor.data = tumor_expression, tumor.ident = tumor_annotation_subset, target.celltypes = target.celltypes,
+                           normal.data = normal_expression)
+  addnormal_example <- as.matrix(list$data); addnormal_annotation <- list$ident
+  
+  runCEP(target.normalized = addnormal_example,  
+         sample.info = addnormal_annotation, label = paste0(label,"_AddNormal"),
+         annotationdata = ref_genome, target.celltypes = target.celltypes, output.dir = output.dir,
+         min.cells = 10, MYwalk = 100) ## Sample list of EP proportion > EP_cutoff (20%)
+}else{
+  runCEP(target.normalized = tumor_expression,  
+         sample.info = tumor_annotation_subset, label = label,
+         annotationdata = ref_genome,target.celltypes = target.celltypes, output.dir = output.dir,
+         min.cells = 10, MYwalk = 100) ## Sample list of EP proportion <= EP_cutoff (20%)
+}
+
+## CNV result visualization
+result = readRDS("GSE131907_CNV_result/GSE131907_CNV_result_AddNormal_after_calc_CNV_score.Rds")
+ep_cell_info = result[result$celltype == "Epithelial cells",]
+ep_cell_info$Samples = str_split_fixed(ep_cell_info$Index, "_", 2)[, 2]
+ep_cell_info = left_join(ep_cell_info, feature_summary, by = "Samples")
+
+total_malignant = sum(ep_cell_info$cell_index == "Tumor")
+total_nonmalignant =  sum(ep_cell_info$cell_index == "Nontumor")
+
+cat("EP cells, # of malignant:     ",  total_malignant, "/", nrow(ep_cell_info), " = ",
+    round(total_malignant/nrow(ep_cell_info) *100, 2) ,"%\n",
+    "EP cells, # of non-malignant: ",  total_nonmalignant, "/", nrow(ep_cell_info), " = ",
+    round(total_nonmalignant/nrow(ep_cell_info) *100, 2) ,"%")
+
+ep_cell_info %>%
+  group_by(Tissue.origins, cell_index) %>%
+  summarise(n = n())
+
+
+cutoff.score = 0.02
+cutoff.corr = 0.2
+
+Plot_p0019 = ggplot(ep_cell_info[ep_cell_info$Patient.id == "P0019",],  aes(x=MS, y= COR)) + 
+  geom_point(aes(fill=cell_index), size=1.5, alpha=.8, shape=21, colour="black")+ 
+  scale_fill_manual(values = c("Tumor"="red","Nontumor"="dodgerblue1")) + 
+  geom_vline(xintercept = cutoff.score, colour="black", size=0.5, linetype = "longdash") + 
+  geom_hline(yintercept = cutoff.corr, colour="black", size=0.5, linetype = "longdash") +
+  xlab("MS score") + ylab("CNV correlation") + 
+  labs(title = "One patient (P0019) from Stage IA") +
+  theme(plot.title = element_text(hjust = 0.5, face="bold", size = 14),
+       axis.title.x = element_text(face="bold", size = 12),
+    axis.title.y = element_text(face="bold", size = 12),
+    legend.text = element_text(face="bold", size = 14),
+    legend.title = element_text(face="bold", size = 14)) + 
+  ylim(-0.5, 0.8) + xlim(0, 0.125)
+
+Plot_P0028 = ggplot(ep_cell_info[ep_cell_info$Patient.id == "P0028",],  aes(x=MS, y= COR)) + 
+  geom_point(aes(fill=cell_index), size=1.5, alpha=.8, shape=21, colour="black")+ 
+  scale_fill_manual(values = c("Tumor"="red","Nontumor"="dodgerblue1")) + 
+  geom_vline(xintercept = cutoff.score, colour="black", size=0.5, linetype = "longdash") + 
+  geom_hline(yintercept = cutoff.corr, colour="black", size=0.5, linetype = "longdash") +
+  xlab("MS score") + ylab("CNV correlation") + 
+  labs(title = "One patient (P0028) from Stage IV") +
+  theme(plot.title = element_text(hjust = 0.5, face="bold", size = 14),
+       axis.title.x = element_text(face="bold", size = 12),
+    axis.title.y = element_text(face="bold", size = 12),
+    legend.text = element_text(face="bold", size = 14),
+    legend.title = element_text(face="bold", size = 14)) +
+  ylim(-0.5, 0.8)+ xlim(0, 0.125)
+
+ggarrange(Plot_p0019, Plot_P0028, common.legend = T, legend="bottom")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
