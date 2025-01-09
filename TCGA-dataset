@@ -1,0 +1,128 @@
+library(TCGAWorkflowData)
+library(DT)
+library("TCGAbiolinks")
+library("limma")
+library("edgeR")
+library("glmnet")
+library("factoextra")
+library("FactoMineR")
+library("SummarizedExperiment")
+library("gplots")
+library("survival")
+library("survminer")
+library("RColorBrewer")
+library("gProfileR")
+library("genefilter")
+library("maftools")
+library(ggplot2)
+library(ComplexHeatmap)
+library(cBioPortalData)
+library(org.Hs.eg.db)
+library(circlize)
+library(stats) 
+library(tidyr)
+library(magrittr)
+
+
+# load TCGA from cBioPortal
+degs = read.csv("DEGs_0_wilcox.csv")
+
+cbio = cBioPortal()
+entrez_ids <- mapIds(org.Hs.eg.db,
+                     keys = degs$X,
+                     column = "ENTREZID",
+                     keytype = "SYMBOL",
+                     multiVals = "first")
+entrez_ids <- na.omit(entrez_ids)
+entrez_ids <- as.character(entrez_ids)
+luad_cBio = cBioPortalData(api = cbio, studyId = "luad_tcga",
+    molecularProfileIds = "luad_tcga_rna_seq_v2_mrna",
+    genes = entrez_ids)
+
+luad_cBio_data <- assay(luad_cBio[["luad_tcga_rna_seq_v2_mrna"]])
+luad_cBio_gene <- rowData(luad_cBio[["luad_tcga_rna_seq_v2_mrna"]])$hugoGeneSymbol
+rownames(luad_cBio_data) <- luad_cBio_gene
+clin_cBio = luad_cBio@colData
+luad_cBio_data = luad_cBio_data[ , colnames(luad_cBio_data) %in% clin_cBio$sampleId]
+
+degs_sorted = degs[order(-abs(degs$avg_log2FC)),]
+degs_sorted = degs_sorted[degs_sorted$X %in% intersect(degs_sorted$X, rownames(luad_cBio_data)), ]
+top55_DEGs = head(degs_sorted$X, 55)
+
+luad_cBio_data <- assay(luad_cBio[["luad_tcga_rna_seq_v2_mrna"]])
+luad_cBio_gene <- rowData(luad_cBio[["luad_tcga_rna_seq_v2_mrna"]])$hugoGeneSymbol
+rownames(luad_cBio_data) <- luad_cBio_gene
+
+luad_cBio_data = luad_cBio_data[top55_DEGs , colnames(luad_cBio_data) %in% clin_cBio$sampleId]
+
+luad_cBio_data <- log2(luad_cBio_data + 1)
+
+luad_cBio_dist_matrix <- dist(t(luad_cBio_data)) 
+luad_cBio_hc_cells <- hclust(luad_cBio_dist_matrix, method = "ward.D")
+
+ht_map_luad_cBio = Heatmap(luad_cBio_data, 
+                  clustering_distance_rows = "euclidean", 
+                  clustering_distance_columns = "euclidean",
+                  clustering_method_rows = "ward.D", 
+                  clustering_method_columns = "ward.D",
+                  row_dend_reorder = TRUE, 
+                  column_dend_reorder = TRUE,
+                  column_split = cutree(luad_cBio_hc_cells, k = 3), # plot cells with 4 cluster
+                  col = colorRamp2(seq(min(luad_cBio_data), max(luad_cBio_data), length = 3), c("blue", "#EEEEEE", "red")),
+                  name = sprintf("Heatmap of top 55 DEGs"),
+                  show_row_names = TRUE,
+                  show_column_names = FALSE,
+                  heatmap_legend_param = list(legend_size = unit(4, "cm"),
+                                              legend_direction = "horizontal",
+                                              gp = gpar(fontsize = 14, fontface = "bold")))
+draw(ht_map_luad_cBio, heatmap_legend_side = "top")
+
+# Survival analysis
+cluster_assignments = cutree(luad_cBio_hc_cells, k=3)
+sample_names = colnames(luad_cBio_data)
+cluster_df = data.frame(Sample = sample_names, Cluster = cluster_assignments[sample_names])
+colData(luad_cBio)$Cluster <- cluster_df$Cluster[match(colData(luad_cBio)$sampleId, cluster_df$Sample)]
+
+colData(luad_cBio)$Cluster = factor(colData(luad_cBio)$Cluster, levels = c(2,1,3), label = c("C1", "C2", "C3"))
+
+
+clin_cBio = colData(luad_cBio)
+clin_cBio$OS_MONTHS <- as.numeric(clin_cBio$OS_MONTHS)
+colData(luad_cBio) <- clin_cBio
+
+fit_luad_cBio <- survfit(Surv(OS_MONTHS, as.numeric(substr(OS_STATUS, 1, 1))) ~ Cluster,
+                         data = colData(luad_cBio))
+
+
+# Manually perform survdiff for each pair
+res = pairwise_survdiff(Surv(OS_MONTHS, as.numeric(substr(OS_STATUS, 1, 1))) ~ Cluster, data=colData(luad_cBio))
+print(res)
+
+p_C1_C2 <- res$p.value[1,1]
+p_C1_C3 <- res$p.value[2,1]
+p_C2_C3 <- res$p.value[2,2]
+
+survplot_luad_cBio = ggsurvplot(fit_luad_cBio, data = colData(luad_cBio), 
+                                xlab = "Time in months", 
+                                xlim = c(0, 120), 
+                                break.x.by = 12, 
+                                risk.table = TRUE,
+                                risk.table.col = "strata", 
+                                ggtheme = theme_minimal(base_size = 14))
+
+survplot_luad_cBio$plot + scale_colour_manual(values = c("cornflowerblue", "tan1", "red2"),  labels = c("C1", "C2", "C3")) +
+  labs(color = "Cluster") +
+  annotate("text", x = Inf, y = 0.95, label = sprintf("p-value C1 vs C2: %.2e", p_C1_C2), hjust = 1, color = "black", size = 8) +
+  annotate("text", x = Inf, y = 0.90, label = sprintf("p-value C1 vs C3: %.2e", p_C1_C3), hjust = 1, color = "black", size = 8) +
+  annotate("text", x = Inf, y = 0.85, label = sprintf("p-value C2 vs C3: %.2e", p_C2_C3), hjust = 1, color = "black", size = 8) + 
+  theme(legend.text = element_text(size = 22, face = "bold"),
+        axis.text = element_text(size = 22, face = "bold"),
+        axis.title = element_text(size = 22, face = "bold"),
+        legend.title = element_text(size = 22, face = "bold"))
+
+
+
+
+
+
+
