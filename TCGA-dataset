@@ -120,6 +120,13 @@ survplot_luad_cBio$plot + scale_colour_manual(values = c("cornflowerblue", "tan1
         axis.title = element_text(size = 22, face = "bold"),
         legend.title = element_text(size = 22, face = "bold"))
 
+# Save to RDS
+data_to_save <- list(
+  clin_cBio_metadate = clin_cBio,
+  luad_cBio_data = luad_cBio_data
+)
+saveRDS(data_to_save, file = "luad_cBio.rds")
+
 
 
 
