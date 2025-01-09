@@ -1,0 +1,38 @@
+library(estimate)
+
+luad_direct = read.table("PURITY/luad_tcga/data_mrna_seq_v2_rsem.txt", sep = "\t",header = T)
+
+luad_direct = luad_direct[!duplicated(luad_direct$Hugo_Symbol),]
+luad_direct = luad_direct[!is.na(luad_direct$Hugo_Symbol),]
+rownames(luad_direct)  = luad_direct$Hugo_Symbol
+entrez_table = luad_direct[, 1:2]
+luad_direct = luad_direct[, -c(1, 2)]
+write.table(luad_direct, file = "PURITY/LUAD_estimate_input.txt", sep = '\t', quote = F)
+
+# transfer data format into GCT
+exp.file = "PURITY/LUAD_estimate_input.txt"
+in.gct.file = "PURITY/ESTIMATE_input.gct"
+outputGCT(exp.file, in.gct.file)
+
+rt <- read.table("PURITY/ESTIMATE_input.gct", 
+                 skip = 2,
+                 header = TRUE, 
+                 sep = "\t")
+
+# filterCommonGenes(): compare genes in expression profile with common gene
+filterCommonGenes(input.f = exp.file, # input file
+                  output.f = "PURITY/common_10412genes.gct", # output as gct filr
+                  id = "GeneSymbol" #GeneSymbol or EntrezID
+) 
+
+out.score.file = "PURITY/ESTIMATE_score.gct"
+# compute stromal score, immune score, and tumor purity
+estimateScore(input.ds = "PURITY/common_10412genes.gct", #in.gct.file, 
+              out.score.file,
+              platform = "illumina") # TCGA data choose illumina
+
+ESTIMATE_score = read.table(out.score.file,skip = 2,header = T,row.names = 1)
+ESTIMATE_score = as.data.frame(t(ESTIMATE_score[, 2:ncol(ESTIMATE_score)])) 
+rownames(ESTIMATE_score) <- gsub("\\.", "-", rownames(ESTIMATE_score))
+
+write.table(ESTIMATE_score, file = "PURITY/LUAD_estimate_score.txt", sep = '\t', quote = F)
