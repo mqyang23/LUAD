@@ -507,15 +507,155 @@ DimPlot(epithelial_seu, reduction = "umap", group.by = "rename.Tissue.origins", 
   theme(plot.title = element_text(hjust = 0.5))
 
 
+# Epithelial Malignant cells only
+
+epithelial_filterd_seu = subset(epithelial_seu, subset = cell_index == "Tumor")
+epithelial_filterd_seu = NormalizeData(epithelial_filterd_seu, normalization.method = "LogNormalize", scale.factor = 1e4)
+epithelial_filterd_seu <- FindVariableFeatures(epithelial_filterd_seu, selection.method = "vst", nfeatures = 3000)
+epithelial_filterd_seu = ScaleData(epithelial_filterd_seu, do.scale = FALSE, do.center = TRUE, scale.max = 10)
+epithelial_filterd_seu = RunPCA(epithelial_filterd_seu, features = VariableFeatures(object = epithelial_filterd_seu))
+
+ElbowPlot(epithelial_filterd_seu)
+
+epithelial_filterd_seu <- FindNeighbors(epithelial_filterd_seu, reduction = "pca", dims = 1:20)
+epithelial_filterd_seu <- FindClusters(epithelial_filterd_seu, resolution = 0.01) #resolution = 0.02 for level1 of annotation
+
+epithelial_filterd_seu <- RunUMAP(epithelial_filterd_seu, reduction = "pca", dims = 1:20)
+
+DimPlot(epithelial_filterd_seu, reduction = "umap", label = T)
+DimPlot(epithelial_filterd_seu, reduction = "umap", group.by = "Stages", label = T)
+DimPlot(epithelial_filterd_seu, reduction = "umap", group.by = "rename.Tissue.origins", label = T)
+
+### delete stage IV cell in cluster 1 and 4, find DEGs in cluster 0 against all others
+
+ep_clear_subset = subset(epithelial_filterd_seu, subset = seurat_clusters != 4)
+ep_clear_subset = subset(ep_clear_subset@meta.data, subset = !(seurat_clusters == 1 & Stages == "IV"))
+ep_clear_subset = epithelial_filterd_seu[, rownames(ep_clear_subset)]
+
+filtered_groups <- ep_clear_subset@meta.data %>%
+  group_by(seurat_clusters = seurat_clusters, Stages = Stages) %>%
+  summarise(n = n(), .groups = 'drop') %>%
+  filter(n > 2)
+
+filter_condition <- with(filtered_groups, paste(seurat_clusters, Stages, sep = "_"))
+ep_clear_subset@meta.data$filterN = paste(Idents(ep_clear_subset), ep_clear_subset$Stages, sep = "_")
+ep_clear_subset <- subset(ep_clear_subset, subset = filterN %in% filter_condition)
+DimPlot(ep_clear_subset, reduction = "umap", label = T)
+DimPlot(ep_clear_subset, reduction = "umap", group.by = "rename.Tissue.origins", label = T)
+DimPlot(ep_clear_subset, reduction = "umap", group.by = "Stages", label = T)
 
 
 
+ep_clear_subset_matrix = as.matrix(ep_clear_subset@assays$RNA$counts)
+ep_clear_subset_ref_genome = ref_genome[rownames(ep_clear_subset_matrix),]
+ep_clear_subset_ref_genome$gene_short_name = rownames(ep_clear_subset_ref_genome)
+ep_clear_subset_cell_annotation = ep_clear_subset@meta.data
+ep_clear_subset_fd <- new("AnnotatedDataFrame", data = ep_clear_subset_ref_genome)
+ep_clear_subset_pd = new("AnnotatedDataFrame", data = ep_clear_subset_cell_annotation)
+ep_clear_subset_cds =  newCellDataSet(as(ep_clear_subset_matrix, "sparseMatrix"),
+                              phenoData = ep_clear_subset_pd, featureData = ep_clear_subset_fd,
+                              expressionFamily = negbinomial.size())
+ep_clear_subset_cds = estimateSizeFactors(ep_clear_subset_cds)
+ep_clear_subset_cds = estimateDispersions(ep_clear_subset_cds)
+ep_clear_subset_express_genes = VariableFeatures(ep_clear_subset)
+ep_clear_subset_cds = setOrderingFilter(ep_clear_subset_cds, ep_clear_subset_express_genes)
+ep_clear_subset_cds = reduceDimension(ep_clear_subset_cds, max_components = 2, method = "DDRTree")
+ep_clear_subset_cds <- orderCells(ep_clear_subset_cds)
+plot_cell_trajectory(ep_clear_subset_cds, color_by = "State") + 
+  ggtitle("EP early and late stage cells Trajectory") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+plot_cell_trajectory(ep_clear_subset_cds, color_by = "rename.Tissue.origins")+ #, cell_size = 4) + 
+  scale_color_manual(values = selected_colors[1:3]) +facet_wrap(~rename.Tissue.origins)+
+  guides(color = guide_legend(title = "Stage")) +
+  theme(legend.position = "right",
+        legend.title = element_text(size = 22),  # , face = "bold"),
+        legend.text = element_text(size = 22),
+        axis.title.x = element_text(size = 22),
+        axis.text.x = element_text(size = 22),
+        axis.title.y = element_text(size = 22),
+        axis.text.y = element_text(size = 22)
+        )
+
+plot_cell_trajectory(ep_clear_subset_cds, color_by = "Stages")+#, cell_size = 4) + 
+  scale_color_manual(values = selected_colors[1:6]) +facet_wrap(~Stages)+
+  guides(color = guide_legend(title = "Stages", override.aes = list(size = 5))) +
+  theme(legend.position = "right",
+        legend.title = element_text(size = 22),  # , face = "bold"),
+        legend.text = element_text(size = 22),
+        axis.title.x = element_text(size = 22),
+        axis.text.x = element_text(size = 22),
+        axis.title.y = element_text(size = 22),
+        axis.text.y = element_text(size = 22)
+        )
+
+ep_clear_subset$State = ep_clear_subset_cds$State
+DimPlot(ep_clear_subset, reduction = "umap", group.by = "State", label = T)
+
+counts <- ep_clear_subset@meta.data %>% 
+  group_by(State, Stages) %>%
+  dplyr::summarise(Count = n())
+
+# Calculate the total count for each State
+total_counts <- ep_clear_subset@meta.data %>% 
+  group_by(State) %>%
+  dplyr::summarise(Total = n())
+
+# Merge the total counts with the original counts to get the percentage
+counts <- counts %>%
+  left_join(total_counts, by = "State") %>%
+  mutate(Percentage = (Count / Total) * 100)
+
+# Plot with percentages stacked
+ggplot(counts, aes(x = factor(State), y = Percentage, fill = Stages)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(values = selected_colors[1:6])+
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(x = "Trajectory branch", y = "Percentage", fill = "Stages") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 
 
+# InferCNV
+library("AnnoProbe")
+dat <- GetAssayData(ep_clear_subset,assay = "RNA",slot = "counts")
+dat <- as.data.frame(dat)
+
+geneInfor=annoGene(rownames(dat),"SYMBOL",'human')   
+colnames(geneInfor)
+geneInfor=geneInfor[with(geneInfor, order(chr, start)),c(1,4:6)]      
+geneInfor=geneInfor[!duplicated(geneInfor[,1]),]
+length(unique(geneInfor[,1]))
+head(geneInfor)
+
+dat=dat[match(geneInfor[,1], rownames(dat)),]    
+rownames(geneInfor) <- geneInfor$SYMBOL   
+geneInfor <- geneInfor[,-1]  
 
 
+meta <- subset(scRNA_harmony@meta.data,select = c("seurat_clusters"))   
+meta$seurat_clusters <- as.character(meta$seurat_clusters)
+meta$seurat_clusters[meta$seurat_clusters == "0"] <- "Stage_IV"
+meta$seurat_clusters[meta$seurat_clusters == "1"] <- "Stage_IA_IB_IIA"
+meta$seurat_clusters[meta$seurat_clusters == "2"] <- "Stage_IA3"
+meta$seurat_clusters[meta$seurat_clusters == "3"] <- "Stage_IIIA"
+meta$seurat_clusters <- factor(meta$seurat_clusters, 
+                               levels = c("Stage_IV", "Stage_IIIA", "Stage_IA_IB_IIA", "Stage_IA3"))
 
+identical(colnames(dat),rownames(meta))  
+identical(rownames(dat),rownames(geneInfor))
 
-
+infercnv_obj = CreateInfercnvObject(raw_counts_matrix=dat,
+                                    annotations_file=meta,
+                                    delim="\t",
+                                    gene_order_file=geneInfor,
+                                    ref_group_names=NULL)
+infercnv_obj = infercnv::run(infercnv_obj,
+                             cutoff=1, # cutoff=1 works well for Smart-seq2, and cutoff=0.1 works well for 10x Genomics
+                             out_dir="GSE131907_InferCNV_rename_3/", 
+                             cluster_by_groups=TRUE, 
+                             denoise=F,
+                             num_threads=6,
+                             HMM=F)
 
