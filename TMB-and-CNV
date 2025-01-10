@@ -1,0 +1,327 @@
+library(TCGAWorkflowData)
+library(DT)
+library("TCGAbiolinks")
+library("limma")
+library("edgeR")
+library("glmnet")
+library("factoextra")
+library("FactoMineR")
+#library("caret")
+library("SummarizedExperiment")
+library("gplots")
+library("survival")
+library("survminer")
+library("RColorBrewer")
+library("gProfileR")
+library("genefilter")
+library("maftools")
+library(ggplot2)
+library(ComplexHeatmap)
+library(cBioPortalData)
+library(org.Hs.eg.db)
+library(circlize)
+library(stats) 
+library(tidyr)
+library(magrittr)
+
+# Load the RDS file
+loaded_data <- readRDS("luad_cBio.rds")
+
+# Access the stored objects
+clin_cBio = loaded_data$clin_cBio_metadate
+luad_cBio_data = loaded_data$luad_cBio_data
+
+degs = read.csv("DEGs_0_wilcox.csv")
+degs_sorted = degs[order(-abs(degs$avg_log2FC)),]
+degs_sorted = degs_sorted[degs_sorted$X %in% intersect(degs_sorted$X, rownames(luad_cBio_data)), ]
+top55_DEGs = head(degs_sorted$X, 55)
+
+Tumor_TCGA_GDC = GDCquery(
+  project = "TCGA-LUAD",
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  experimental.strategy = "RNA-Seq",
+  workflow.type = "STAR - Counts",
+  sample.type = c("Primary Tumor")
+)
+
+#load the actual RNASeq data into R
+luad_tumor_GDC = GDCprepare(Tumor_TCGA_GDC)
+
+# get subset of TCGA-LUAD
+gene_symbols = rowData(luad_tumor_GDC)$gene_name
+matched_indices = which(gene_symbols %in% top55_DEGs)
+
+luad_tumor_GDC = luad_tumor_GDC[matched_indices,]
+dim(luad_tumor_GDC)
+
+keep_samples <- with(colData(luad_tumor_GDC),
+                     (definition == "Primary solid Tumor" & patient %in% clin_cBio$patientId))
+
+subset_tcga_GDC <- luad_tumor_GDC[, keep_samples]
+subset_tcga_GDC
+
+#filter duplicated sample
+tumorMeta = as.data.frame(subset_tcga_GDC@colData[subset_tcga_GDC@colData$definition == "Primary solid Tumor",])
+duplicated_samples = unique(tumorMeta$patient[duplicated(tumorMeta$patient)])
+
+duplicated_df = tumorMeta[tumorMeta$patient %in% duplicated_samples,]
+sample_condition <- grepl("A$", duplicated_df$sample)
+duplicated_df = duplicated_df[sample_condition,]
+
+patient_condition <- grepl("R-A278-07$", duplicated_df$barcode)
+keeped_df <- duplicated_df[patient_condition,]
+
+non_duplicated_df = tumorMeta[!tumorMeta$patient %in% duplicated_samples, ]
+
+filtered_tumor_df = tumorMeta[tumorMeta$barcode %in% keeped_df$barcode | tumorMeta$barcode %in% non_duplicated_df$barcode, ]
+
+tcga_GDC = subset_tcga_GDC[, filtered_tumor_df$barcode]
+
+
+clin_GDCtumor = tcga_GDC@colData
+
+colData(tcga_GDC)$Cluster = 0 # "0" for temp
+colData(tcga_GDC)[colData(tcga_GDC)$patient %in% clin_cBio$patientId,]$Cluster =  clin_cBio[, c("patientId", "Cluster")][colData(tcga_GDC)[colData(tcga_GDC)$patient %in% clin_cBio$patientId,]$patient, ]$Cluster
+
+clin_GDC = colData(tcga_GDC)
+table(clin_GDC$Cluster)
+
+colData(tcga_GDC)[colData(tcga_GDC)$Cluster == 1, ]$Cluster = "C1"
+colData(tcga_GDC)[colData(tcga_GDC)$Cluster == 2, ]$Cluster = "C2"
+colData(tcga_GDC)[colData(tcga_GDC)$Cluster == 3, ]$Cluster = "C3"
+clin_GDC = colData(tcga_GDC)
+table(clin_GDC$Cluster)
+
+
+# TMB
+TMB_TCGA = GDCquery(project = "TCGA-LUAD", 
+                    data.category = "Simple Nucleotide Variation", 
+                    access = "open",
+                    data.type = "Masked Somatic Mutation", 
+                    workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking")
+
+GDCdownload(TMB_TCGA)
+maf <- GDCprepare(TMB_TCGA)
+
+# filter samples not included before
+maf$sampleID <- substr(maf$Tumor_Sample_Barcode, 1, 16)
+maf = maf[maf$sampleID %in% clin_GDC$sample,]
+
+mutationType = unique(maf$Variant_Classification)
+removeMutationType <- mutationType[c(1,10,3, 11, 12, 18,5,14,16,15, 6)]
+maf = maf[!(maf$Variant_Classification %in% removeMutationType),]
+length(unique(maf$Hugo_Symbol))
+
+length(unique(maf$sampleID))
+
+match_df = clin_GDC[, c("sample", "Cluster")]
+match_df
+
+single_hit_maf <- maf %>%
+  dplyr::arrange(sampleID, Hugo_Symbol, desc(Variant_Classification)) %>%
+  dplyr::distinct(sampleID, Hugo_Symbol, .keep_all = TRUE)
+
+
+maf_with_cluster <- merge(single_hit_maf, match_df[, c('sample', 'Cluster')], by.x = 'sampleID', by.y = 'sample', all.x = TRUE)
+maf_with_cluster = as.data.frame(maf_with_cluster)
+length(unique(maf_with_cluster$sampleID))
+
+maf_with_cluster$Cluster = factor(maf_with_cluster$Cluster, levels = c("C1","C2","C3"))
+
+unique(maf_with_cluster$Variant_Classification)
+length(unique(maf_with_cluster$Hugo_Symbol))
+
+
+all_mut <- maftools::read.maf(maf = single_hit_maf, clinicalData = maf_with_cluster)
+
+unique_samples_per_cluster <- maf_with_cluster %>%
+  group_by(Cluster) %>%
+  summarize(unique_samples = n_distinct(Tumor_Sample_Barcode), .groups = 'drop')
+
+unique_samples_per_cluster <- maf_with_cluster %>%
+  group_by(Cluster) %>%
+  summarize(unique_samples = n_distinct(sampleID), .groups = 'drop')
+
+print(unique_samples_per_cluster)
+
+mutation.count <- maf_with_cluster %>% group_by(Hugo_Symbol, Cluster) %>% 
+  summarise(mutation_count = n(), .groups = "drop") 
+
+mutation.rate <- mutation.count %>%  
+  mutate(
+    mutation_rate = case_when(
+      Cluster == "C1" ~ mutation_count / unique_samples_per_cluster$unique_samples[1],
+      Cluster == "C2" ~ mutation_count / unique_samples_per_cluster$unique_samples[2],
+      Cluster == "C3" ~ mutation_count / unique_samples_per_cluster$unique_samples[3],
+    )
+  )
+
+filtered_df <- mutation.rate  %>% filter(Cluster %in% c("C1", "C3"))
+
+contrast_df <- filtered_df %>%
+  dplyr::select(Hugo_Symbol, Cluster, mutation_rate) %>%
+  spread(Cluster, mutation_rate) %>%
+  mutate(mutation_difference = C3 - C1,absolute_difference = abs(mutation_difference)) %>%
+  dplyr::select(Hugo_Symbol, mutation_difference, absolute_difference) %>%
+  arrange(desc( mutation_difference))  # Sort by absolute difference
+
+top10.C3vsC1 <- contrast_df %>%  top_n(10, mutation_difference) %>% ungroup()
+top10.C1vsC3 <- contrast_df %>%  arrange(mutation_difference) %>% slice_head(n=10)
+top10.C3vsC1$Hugo_Symbol
+top10.C1vsC3$Hugo_Symbol
+
+top10.C3vsC1 <- contrast_df %>%  top_n(10, mutation_difference) %>% ungroup()
+top10.C1vsC3 <- contrast_df %>%  arrange(mutation_difference) %>% slice_head(n=10)
+top10.C3vsC1$Hugo_Symbol
+top10.C1vsC3$Hugo_Symbol
+
+vc_cols = RColorBrewer::brewer.pal(n = 8, name = 'Paired')
+names(vc_cols) = c(
+  'Frame_Shift_Del',
+  'Missense_Mutation',
+  'Nonsense_Mutation',
+  'Frame_Shift_Ins',
+  'Splice_Site',
+  'In_Frame_Del',
+  'In_Frame_Ins'
+)
+
+my_genes <- unique(c(top10.C3vsC1$Hugo_Symbol, top10.C1vsC3$Hugo_Symbol))
+Clustercolors <- c("C1" = "cornflowerblue",
+                   "C2" = "tan1", 
+                   "C3" = "red2")
+oncoplot(maf = all_mut,
+         colors = vc_cols, 
+         genes = my_genes,                  
+         clinicalFeatures = "Cluster",      
+         sortByAnnotation = TRUE,           
+         annotationColor =  list(Cluster = Clustercolors),    # 注释颜色
+         #annotation.pos = "top",
+         drawColBar = FALSE,
+         showTitle = FALSE,
+         legendFontSize = 2,
+         annotationFontSize = 2,
+         bgCol = "grey95",
+         gene_mar = 8,
+         fontSize = 1.2,
+         sepwd_genes = 0.25,
+         sepwd_samples = 0
+)
+
+
+tmb_table = tmb(maf = all_mut, captureSize = 50)
+cluster_barcode = unique(maf_with_cluster[ , c("Tumor_Sample_Barcode", "Cluster")])
+tmb_table = left_join(tmb_table, cluster_barcode, by = "Tumor_Sample_Barcode")
+
+
+# cNV with GISTIC2.0
+## prepare input files for GISTIC
+query_cnv <- GDCquery(project = "TCGA-LUAD", 
+                      data.category = "Copy Number Variation", 
+                      data.type = "Masked Copy Number Segment",
+                      sample.type = c("Primary Tumor"),
+                      workflow.type = "DNAcopy")
+
+GDCdownload(query_cnv, method = "api")
+tcga_cnv <- GDCprepare(query_cnv, save = T, save.filename = "CNV_TCGA_LUAD_option1.rda")
+
+tcga_cnv = load("CNV_TCGA_LUAD_option1.rda")
+luad_seg = eval(parse(text = tcga_cnv))
+luad_seg = luad_seg[, -1]
+luad_seg = luad_seg[, c('Sample', 'Chromosome', 'Start', 'End', 'Num_Probes', 'Segment_Mean')]
+
+
+# tumor segment file for GISTIC input
+tumor_seg = luad_seg[substr(luad_seg$Sample, 14, 15) == "01",]
+write.table(tumor_seg, file = "tumor_seg_option1.txt", sep = "\t", quote = F, row.names = F)
+
+hg_marker_file = read.delim("GISTIC_input/snp6.na35.remap.hg38.subset.txt.gz")
+
+hg_marker_file = hg_marker_file[hg_marker_file$freqcnv == "FALSE",]
+
+# Marker file for GISTIC input
+hg_marker_file = hg_marker_file[, c(1,2,3)]
+write.table(hg_marker_file, "hg_marker_file.txt", sep = "\t", col.names = T, row.names = F)
+
+
+# Maftools plot GISTIC result
+# load GISTIC results and import all the relevant files
+luad.gistic = readGistic(gisticDir = "GISTIC_result/Option-1/", isTCGA = T)
+
+match_df$sample_short_name = substr(match_df$sample,1,12)
+
+common_sample = intersect(unique(match_df$sample_short_name), unique(luad.gistic@cnv.summary$Tumor_Sample_Barcode))
+
+sub_match_df = match_df[match_df$sample_short_name %in% common_sample,]
+gistic_with_cluster <- merge(luad.gistic@cnv.summary, sub_match_df[, c('sample_short_name', 'Cluster')], 
+                             by.x = 'Tumor_Sample_Barcode', by.y = 'sample_short_name', all.x = TRUE)
+gistic_with_cluster = as.data.frame(gistic_with_cluster)
+gistic_with_cluster = gistic_with_cluster[!is.na(gistic_with_cluster$Cluster),]
+
+total_amp = gistic_with_cluster %>%
+  group_by(Tumor_Sample_Barcode, Amp, Cluster) %>%
+  summarise(n = n())
+
+total_del = gistic_with_cluster %>%
+  group_by(Tumor_Sample_Barcode, Del, Cluster) %>%
+  summarise(n = n())
+
+
+my_comparisons = list( c("C1", "C2"), c("C1", "C3"), c("C2", "C3") )
+Plot_b1 = ggplot(tmb_table, aes(x = Cluster, y = total_perMB, color = Cluster)) +
+  geom_boxplot(size = 1.5) +
+  theme_minimal() +
+  scale_color_manual(values =  c("cornflowerblue", "tan1", "red2")) +
+  labs(title="", x = "", y = "TMB") +
+  theme(text = element_text(size = 24, face = "bold"),
+        panel.border = element_rect(colour = "black", fill = NA, size = 2),
+        axis.title = element_text(size = 24),  # Specific size for axis titles
+        plot.title = element_text(size = 24, hjust = 0.5),
+        legend.position = "none") +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox.test", method.args = list(alternative = "two.sided"), size = 8, hide.ns = TRUE,
+                     label.y = c(10, 13, 16), label = "p.signif") +
+  coord_cartesian(ylim = c(0, 19))
+Plot_b1
+
+Plot_b2 = ggplot(total_amp, aes(x = factor(Cluster), y = Amp, color = factor(Cluster))) +
+  geom_boxplot(size = 1.5) +
+  theme_minimal() +
+  scale_color_manual(name = "Cluster", values =  c("cornflowerblue", "tan1", "red2")) +
+  labs(title="", x = "", y = "Amplification") +
+  theme(text = element_text(size = 24, face = "bold"),
+        panel.border = element_rect(colour = "black", fill = NA, size = 2),
+        axis.title = element_text(size = 24),  # Specific size for axis titles
+        plot.title = element_text(size = 24, hjust = 0.5),
+        legend.position = "none") +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox.test", method.args = list(alternative = "two.sided"), size = 8, hide.ns = TRUE, 
+                     label.y = c(1200, 1500, 1800), label = "p.signif") +
+  coord_cartesian(ylim = c(0, 2000))
+Plot_b2
+
+Plot_b3 = ggplot(total_del, aes(x = factor(Cluster), y = Del, color = factor(Cluster))) +
+  geom_boxplot(size = 1.5) +
+  theme_minimal() +
+  scale_color_manual(name = "Cluster", values =  c("cornflowerblue", "tan1", "red2")) +
+  labs(title="", x = "", y = "Deletion") +
+  theme(text = element_text(size = 24, face = "bold"),
+        panel.border = element_rect(colour = "black", fill = NA, size = 2),
+        axis.title = element_text(size = 24),  # Specific size for axis titles
+        plot.title = element_text(size = 24, hjust = 0.5),
+        legend.position = "none") +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox.test", method.args = list(alternative = "two.sided"), size = 8, hide.ns = TRUE, 
+                     label.y = c(4000, 4800, 5600), label = "p.signif") +
+  coord_cartesian(ylim = c(0, 6500))
+Plot_b3
+
+
+# Combine the plots with adjusted text settings
+combined_plot <- ggarrange(
+  Plot_b1, Plot_b2, Plot_b3,
+  ncol = 3, 
+  labels = c("a", "b", "c"),
+  font.label = list(size = 24, face = "bold")
+) + theme(legend.position = "none")
+
+# Print the combined plot
+print(combined_plot)
