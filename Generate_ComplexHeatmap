@@ -1,1 +1,285 @@
+library(ggplot2)
+library(ggpubr)
+library(ComplexHeatmap)
+library("RColorBrewer")
+library(circlize)
 
+
+# Load the RDS file
+loaded_data <- readRDS("luad_cBio.rds")
+
+# Access the stored objects
+clin_cBio = loaded_data$clin_cBio_metadate
+luad_cBio_data = loaded_data$luad_cBio_data
+
+
+clin_cBio$Stage = gsub("^(Stage [IV]+).*", "\\1", clin_cBio$AJCC_PATHOLOGIC_TUMOR_STAGE)
+clin_cBio[clin_cBio$SEX == "MALE",]$SEX = "Male"
+
+
+ESTIMATE_score = read.table(file = "PURITY/LUAD_estimate_score.txt", sep = "\t")
+ESTIMATE_score$Samples = rownames(ESTIMATE_score)
+
+puree_output = read.table('PUREE_output_rename.txt', sep = "\t", header = T)
+
+ESTIMATE_score <- merge(ESTIMATE_score, puree_output, by = "Samples")
+
+rownames(ESTIMATE_score) = ESTIMATE_score$Samples
+ESTIMATE_score = ESTIMATE_score[clin_cBio$sampleId,]
+dim(ESTIMATE_score)
+
+clin_cBio = merge(clin_cBio, ESTIMATE_score, by.x = "sampleId", by.y = "Samples")
+
+gender_chi = as.data.frame(clin_cBio[, c("SEX", "Cluster")])
+gender_chi$SEX <- as.factor(gender_chi$SEX)
+gender_chi$Cluster <- as.factor(gender_chi$Cluster)
+gender_table <- table(gender_chi$SEX, gender_chi$Cluster)
+test <- chisq.test(gender_table)
+print(test)
+
+
+
+Stage_chi = as.data.frame(clin_cBio[, c("Stage", "Cluster")])
+Stage_chi$Stage <- as.factor(Stage_chi$Stage)
+Stage_chi$Cluster <- as.factor(Stage_chi$Cluster)
+Stage_table <- table(Stage_chi$Stage, Stage_chi$Cluster)
+test <- chisq.test(Stage_table)
+print(test)
+
+
+prop.table(Stage_table, margin = 2) * 100
+
+
+
+
+
+# StromalScore
+StromalScore_chi = as.data.frame(clin_cBio[, c("StromalScore", "Cluster")])
+StromalScore_chi$Cluster <- as.factor(StromalScore_chi$Cluster)
+StromalScore_anova_result <- aov(StromalScore ~ Cluster, data = StromalScore_chi)
+summary(StromalScore_anova_result)
+
+TukeyHSD(StromalScore_anova_result)
+Stromal_plot = ggplot(StromalScore_chi, aes(x = Cluster, y = StromalScore, colour = Cluster)) +
+  geom_boxplot(size = 1.5) +
+  scale_colour_manual(values = c("cornflowerblue", "tan1", "red2"),  labels = c("C1", "C2", "C3")) + 
+  theme_minimal() +
+  theme(text = element_text(size = 18, face = "bold"),
+        panel.border = element_rect(colour = "black", fill = NA, size = 2),
+        axis.title = element_text(size = 18),  # Specific size for axis titles
+        plot.title = element_text(size = 18, hjust = 0.5),
+        axis.text.x = element_blank(),
+        legend.position = "none") +
+  labs(title = "",
+       x = "",
+       y = "Stromal Score")
+
+
+# ImmuneScore
+ImmuneScore_chi = as.data.frame(clin_cBio[, c("ImmuneScore", "Cluster")])
+ImmuneScore_chi$Cluster <- as.factor(ImmuneScore_chi$Cluster)
+ImmuneScore_anova_result <- aov(ImmuneScore ~ Cluster, data = ImmuneScore_chi)
+summary(ImmuneScore_anova_result)
+TukeyHSD(ImmuneScore_anova_result)
+Immune_plot = ggplot(ImmuneScore_chi, aes(x = Cluster, y = ImmuneScore, colour = Cluster)) +
+  geom_boxplot(size = 1.5) +
+  scale_colour_manual(values = c("cornflowerblue", "tan1", "red2"),  labels = c("C1", "C2", "C3")) + 
+  theme_minimal() +
+  theme(text = element_text(size = 18, face = "bold"),
+        panel.border = element_rect(colour = "black", fill = NA, size = 2),
+        axis.title = element_text(size = 18),  # Specific size for axis titles
+        plot.title = element_text(size = 18, hjust = 0.5),
+        axis.text.x = element_blank(),
+        legend.position = "none") +
+  labs(title = "",
+       x = "",
+       y = "Immune Score")
+
+
+# Tumor Purity
+PUREEpurity_chi = as.data.frame(clin_cBio[, c("PUREE_purity", "Cluster")])
+PUREEpurity_chi$Cluster <- as.factor(PUREEpurity_chi$Cluster)
+
+PUREEpurity_anova_result <- aov(PUREE_purity ~ Cluster, data = PUREEpurity_chi)
+summary(PUREEpurity_anova_result)
+
+TukeyHSD(PUREEpurity_anova_result)
+PUREE_plot = ggplot(PUREEpurity_chi, aes(x = Cluster, y = PUREE_purity, colour = Cluster)) +
+  geom_boxplot(size = 1.5) +
+  scale_colour_manual(values = c("cornflowerblue", "tan1", "red2"),  labels = c("C1", "C2", "C3")) + 
+  theme_minimal() +
+  theme(text = element_text(size = 18, face = "bold"),
+        panel.border = element_rect(colour = "black", fill = NA, size = 2),
+        axis.title = element_text(size = 18),  # Specific size for axis titles
+        plot.title = element_text(size = 18, hjust = 0.5),
+        axis.text.x = element_blank(), 
+        legend.position = "none") +
+  labs(title = "",
+       x = "",
+       y = "Tumor Purity Score")
+
+figure3c = ggarrange(Immune_plot, Stromal_plot,PUREE_plot,
+                      ncol = 1)
+
+
+row_dist_matrix <- dist(luad_cBio_data, method = "euclidean")
+row_hc <- hclust(row_dist_matrix, method = "ward.D")
+row_clusters <- cutree(row_hc, k = 4)
+row_clusters
+
+luad_cBio_dist_matrix <- dist(t(luad_cBio_data)) 
+luad_cBio_hc_cells <- hclust(luad_cBio_dist_matrix, method = "ward.D")
+
+
+table(row_clusters)
+
+
+
+go_terms4 = c("Biosynthesis of amino acids", "Fibroblast apoptotic process (BP)", "Response to tumor necrosis factor (BP)")#, "(n=28)")
+go_terms1 = c("TNF signaling pathway", "Chemotaxis (BP)")#, "(n=11)")
+go_terms2 = c("Calcium signaling pathway")#, "(n=5)")
+go_terms3 = c("Primary bile acid biosynthesis", "Lung saccule development (BP)", "Immune response-inhibiting signal transduction (BP)")#, "(n=11)")
+
+
+
+text_list = list(
+  text1 = go_terms2,
+  text2 = go_terms3,
+  text3 = go_terms4,
+  text4 = go_terms1
+)
+
+# note how we set the width of this empty annotation
+row_annotation = rowAnnotation(foo = anno_empty(border = FALSE,  
+                                                width = unit(16, "cm")))
+
+stage_colors <- c("Stage I" = "blue", 
+                  "Stage II" = "green",
+                  "Stage III" = "yellow",
+                  "Stage IV" = "red")
+Gender_colors = c("Female" = "pink", "Male" = "skyblue")
+Stromal_colors = colorRamp2(seq(min(clin_cBio$StromalScore), max(clin_cBio$StromalScore), length = 3), c("black", "#EEEEEE", "yellow"))
+Immune_colors  = colorRamp2(seq(min(clin_cBio$ImmuneScore), max(clin_cBio$ImmuneScore), length = 3), c("black", "#EEEEEE", "yellow"))
+#Purity_colors  = colorRamp2(seq(min(clin_cBio$TumorPurity), max(clin_cBio$TumorPurity), length = 3), c("black", "#EEEEEE", "yellow"))
+PUREE_Purity_colors  = colorRamp2(seq(min(clin_cBio$PUREE_purity), max(clin_cBio$PUREE_purity), length = 3), c("black", "#EEEEEE", "yellow"))
+
+col_ha = HeatmapAnnotation(Gender = clin_cBio$SEX,
+                           Stage = clin_cBio$Stage,
+                           StromalScore = clin_cBio$StromalScore,
+                           ImmuneScore = clin_cBio$ImmuneScore,
+                           #TumorPurity = clin_cBio$TumorPurity,
+                           TumorPurity= clin_cBio$PUREE_purity,
+                           col = list(Stage = stage_colors,
+                                      Gender = Gender_colors,
+                                      StromalScore = Stromal_colors,
+                                      ImmuneScore = Immune_colors,
+                                      #TumorPurity = Purity_colors,
+                                      TumorPurity = PUREE_Purity_colors),
+                           gap = unit(c(0.1, 2, 0.1,  0.1, 0.1, 3), "mm"),
+                           simple_anno_size = unit(8, "mm"),
+                           annotation_name_side = "right",
+                           annotation_name_gp= gpar(fontsize = 18, fontface = "bold"),
+                           annotation_legend_param = list(
+                             Gender = list(
+                               at = c("Female", "Male"), 
+                               labels = c("F", "M"), 
+                               ncol = 2,
+                               legend_direction = "horizontal",
+                               labels_gp = gpar(fontsize = 12, fontface = "bold"),
+                               title_gp = gpar(fontsize = 18, fontface = "bold")
+                             ),
+                             Stage = list(
+                               at = c("Stage I", "Stage II", "Stage III", "Stage IV"), 
+                               labels = c("I", "II", "III", "IV"), 
+                               ncol = 4,
+                               legend_direction = "horizontal",
+                               labels_gp = gpar(fontsize = 12, fontface = "bold"),
+                               title_gp = gpar(fontsize = 18, fontface = "bold")
+                             ),
+                             StromalScore = list(
+                               at = c(-2000, 0, 2000), 
+                               labels = c("-2000", "0", "2000"), 
+                               legend_width = unit(3.5, "cm"),
+                               legend_direction = "horizontal",
+                               labels_gp = gpar(fontsize = 12, fontface = "bold"),
+                               title_gp = gpar(fontsize = 18, fontface = "bold")
+                             ),
+                             ImmuneScore = list(
+                               at = c(-1300, 900, 3100), 
+                               labels = c("-1300", "900", "3100"),
+                               legend_width = unit(3.5, "cm"),
+                               legend_direction = "horizontal",
+                               labels_gp = gpar(fontsize = 12, fontface = "bold"),
+                               title_gp = gpar(fontsize = 18, fontface = "bold")
+                             ),
+                             #TumorPurity = list(
+                             #  at = c(0.3,  1), 
+                             #  labels = c("0.3", "1"),
+                             #  legend_width = unit(3.5, "cm"),
+                             #  legend_direction = "horizontal",
+                             #  labels_gp = gpar(fontsize = 12, fontface = "bold"),
+                             #  title_gp = gpar(fontsize = 18, fontface = "bold")
+                             #),
+                             TumorPurity = list(
+                               at = c(0.2,  1), 
+                               labels = c("0.2", "1"),
+                               legend_width = unit(3.5, "cm"),
+                               legend_direction = "horizontal",
+                               labels_gp = gpar(fontsize = 12, fontface = "bold"),
+                               title_gp = gpar(fontsize = 18, fontface = "bold")
+                             )
+                           )
+)
+
+
+ht_map_luad_cBio =  Heatmap(luad_cBio_data,  
+                            top_annotation = col_ha, 
+                            right_annotation = row_annotation,
+                            clustering_distance_rows = "euclidean", 
+                            clustering_distance_columns = "euclidean",
+                            clustering_method_rows = "ward.D", 
+                            clustering_method_columns = "ward.D",
+                            row_dend_reorder = TRUE, 
+                            column_dend_reorder = TRUE,
+                            row_title = NULL,                                                   
+                            column_title = NULL,                                                
+                            column_split = cutree(luad_cBio_hc_cells, k =3),                   # plot cells with 4 clusters
+                            row_split = cutree(row_hc, k = 4),
+                            col = colorRamp2(seq(min(luad_cBio_data), max(luad_cBio_data), length = 3), c("blue", "#EEEEEE", "red")),
+                            name = sprintf("Heatmap of top 60 DEGs"),
+                            show_row_names =  FALSE, #TRUE,
+                            show_column_names = FALSE,
+                            row_dend_width = unit(2, "cm"),
+                            column_dend_height = unit(2,"cm"),
+                            row_names_gp = gpar(fontsize = 18, fontface = "bold"),             # Set row names font size and style
+                            column_names_gp = gpar(fontsize = 18, fontface = "bold"),           # Set column names font size and style
+                            heatmap_legend_param = list(
+                              title = "Expression level",                                     # Optional: add a title to the legend
+                              title_gp = gpar(fontsize = 18, fontface = "bold"),              # Set legend title font size and style
+                              labels_gp = gpar(fontsize = 18, fontface = "bold"),             # Set legend labels font size and style
+                              legend_size = unit(3, "cm"),                                    # Adjust the size of the legend
+                              legend_direction = "vertical",
+                              title_position = "leftcenter-rot", 
+                              gp = gpar(fontsize = 18, fontface = "bold")
+                            )
+)
+
+draw(ht_map_luad_cBio, heatmap_legend_side = "left", annotation_legend_side = "top", padding = unit(c(20, 5, 5, 5), "mm"))
+
+column_titles <- c("C1", "C2", "C3")
+
+
+grid.lines(c(0.360, 0.360), c(0.075, 0.85), gp = gpar(lty = 2, lwd = 4))
+grid.lines(c(0.489, 0.489), c(0.075, 0.85), gp = gpar(lty = 2, lwd = 4))
+grid.text("C1", 2.3/10, 0.30/4, default.units = "npc", gp = gpar(fontsize = 18, fontface = "bold"))
+grid.text("C2", 4.3/10, 0.30/4, default.units = "npc", gp = gpar(fontsize = 18, fontface = "bold"))
+grid.text("C3", 5.3/10, 0.30/4, default.units = "npc", gp = gpar(fontsize = 18, fontface = "bold"))
+
+fill_corlors = brewer.pal(n = 4, name = "Accent")
+
+for(i in 1:4) {
+  decorate_annotation("foo", slice = i, {
+    grid.rect(x = 0, width = unit(2, "mm"), gp = gpar(fill = fill_corlors[i], col = NA), just = "left")
+    grid.text(paste(text_list[[i]], collapse = "\n"), x = unit(4, "mm"), just = "left", gp = gpar(fontsize = 18, fontface = "bold")) 
+  })
+}
