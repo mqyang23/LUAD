@@ -1,0 +1,699 @@
+library(TCGAWorkflowData)
+library(DT)
+library("TCGAbiolinks")
+library("limma")
+library("edgeR")
+library("glmnet")
+library("factoextra")
+library("FactoMineR")
+library("SummarizedExperiment")
+library("gplots")
+library("survival")
+library("survminer")
+library("RColorBrewer")
+library("gProfileR")
+library("genefilter")
+library("maftools")
+library(ggplot2)
+library(ComplexHeatmap)
+library(cBioPortalData)
+library(org.Hs.eg.db)
+library(circlize)
+library(stats) 
+library(tidyr)
+library(magrittr)
+
+
+library(GSEABase)
+library(GSVA)
+library(tidyverse)
+library(clusterProfiler)
+library(msigdbr)
+library(BiocParallel)
+
+#################################################################################################
+# read top 60 gene list
+degs = read.csv("DEGs_0_vs_123.csv")
+dim(degs)
+
+#load TCGA from cBioPortal
+cbio = cBioPortal()
+# Convert gene symbols to Entrez IDs
+entrez_ids <- mapIds(org.Hs.eg.db,
+                     keys = degs$X,
+                     column = "ENTREZID",
+                     keytype = "SYMBOL",
+                     multiVals = "first")
+
+entrez_ids <- na.omit(entrez_ids)
+entrez_ids <- as.character(entrez_ids)
+
+# extract Luad expression: 377 DEGs x 517 TCGA cells
+luad_cBio = cBioPortalData(api = cbio, studyId = "luad_tcga",
+                           molecularProfileIds = "luad_tcga_rna_seq_v2_mrna",
+                           genes = entrez_ids)
+luad_cBio
+
+# extract 55 DEGs Luad expression: 55 DEGs x 517 TCGA cells
+luad_cBio_data <- assay(luad_cBio[["luad_tcga_rna_seq_v2_mrna"]])
+luad_cBio_gene <- rowData(luad_cBio[["luad_tcga_rna_seq_v2_mrna"]])$hugoGeneSymbol
+rownames(luad_cBio_data) <- luad_cBio_gene
+
+clin_cBio = luad_cBio@colData
+dim(clin_cBio)
+
+
+luad_cBio_data = luad_cBio_data[ , colnames(luad_cBio_data) %in% clin_cBio$sampleId]
+dim(luad_cBio_data)
+
+
+degs_sorted = degs[order(-abs(degs$avg_log2FC)),]
+degs_sorted = degs_sorted[degs_sorted$X %in% intersect(degs_sorted$X, rownames(luad_cBio_data)), ]
+top55_DEGs = head(degs_sorted$X, 55)
+
+#write.csv(top55_DEGs, "top55_degs.csv")
+
+entrez_ids <- mapIds(org.Hs.eg.db,
+                     keys = top55_DEGs,
+                     column = "ENTREZID",
+                     keytype = "SYMBOL",
+                     multiVals = "first")
+
+entrez_ids <- na.omit(entrez_ids)
+entrez_ids <- as.character(entrez_ids)
+
+
+luad_cBio = cBioPortalData(api = cbio, studyId = "luad_tcga",
+                           molecularProfileIds = "luad_tcga_rna_seq_v2_mrna",
+                           genes = entrez_ids)
+luad_cBio
+
+
+
+# GDC data loaded
+Tumor_TCGA_GDC = GDCquery(
+  project = "TCGA-LUAD",
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  experimental.strategy = "RNA-Seq",
+  workflow.type = "STAR - Counts",
+  sample.type = c("Primary Tumor")
+)
+
+
+#load the actual RNASeq data into R
+luad_tumor_GDC = GDCprepare(Tumor_TCGA_GDC)
+
+# get subset of TCGA-LUAD
+gene_symbols = rowData(luad_tumor_GDC)$gene_name
+matched_indices = which(gene_symbols %in% top55_DEGs)
+
+luad_tumor_GDC = luad_tumor_GDC[matched_indices,]
+dim(luad_tumor_GDC)
+
+
+
+
+clin_GDCtumor = luad_tumor_GDC@colData
+dim(clin_GDCtumor)
+
+clin_cBio = luad_cBio@colData
+dim(clin_cBio)
+
+
+
+sum(clin_cBio$patientId %in% clin_GDCtumor$patient)
+
+
+
+
+
+######################################## cBioportal clustering ##############################################################
+
+luad_cBio_data <- assay(luad_cBio[["luad_tcga_rna_seq_v2_mrna"]])
+luad_cBio_data = luad_cBio_data[ , colnames(luad_cBio_data) %in% clin_cBio$sampleId]
+dim(luad_cBio_data)
+
+luad_cBio_gene <- rowData(luad_cBio[["luad_tcga_rna_seq_v2_mrna"]])$hugoGeneSymbol
+
+luad_cBio_data <- log2(luad_cBio_data + 1)
+rownames(luad_cBio_data) <- luad_cBio_gene
+luad_cBio_data[1:5, 1:5]
+
+
+luad_cBio_dist_matrix <- dist(t(luad_cBio_data)) 
+luad_cBio_hc_cells <- hclust(luad_cBio_dist_matrix, method = "ward.D")
+
+ht_map_luad_cBio = Heatmap(luad_cBio_data, 
+                           clustering_distance_rows = "euclidean", 
+                           clustering_distance_columns = "euclidean",
+                           clustering_method_rows = "ward.D", 
+                           clustering_method_columns = "ward.D",
+                           row_dend_reorder = TRUE, 
+                           column_dend_reorder = TRUE,
+                           column_split = cutree(luad_cBio_hc_cells, k = 3), # plot cells with 4 cluster
+                           col = colorRamp2(seq(min(luad_cBio_data), max(luad_cBio_data), length = 3), c("blue", "#EEEEEE", "red")),
+                           name = sprintf("Heatmap of top 60 DEGs"),
+                           show_row_names = TRUE,
+                           show_column_names = FALSE,
+                           heatmap_legend_param = list(legend_size = unit(4, "cm"),
+                                                       legend_direction = "horizontal",
+                                                       gp = gpar(fontsize = 14, fontface = "bold")))
+draw(ht_map_luad_cBio, heatmap_legend_side = "top")
+
+
+cluster_assignments = cutree(luad_cBio_hc_cells, k=3)
+sample_names = colnames(luad_cBio_data)
+cluster_df = data.frame(Sample = sample_names, Cluster = cluster_assignments[sample_names])
+colData(luad_cBio)$Cluster <- cluster_df$Cluster[match(colData(luad_cBio)$sampleId, cluster_df$Sample)]
+
+#survival analysis
+clin_cBio = colData(luad_cBio)
+clin_cBio$OS_MONTHS <- as.numeric(clin_cBio$OS_MONTHS)
+colData(luad_cBio) <- clin_cBio
+
+fit_luad_cBio <- survfit(Surv(OS_MONTHS, as.numeric(substr(OS_STATUS, 1, 1))) ~ Cluster,
+                         data = colData(luad_cBio))
+
+#get maximum OS_MONTHS for all clusters
+specific_time = 60 # min(tapply(colData(luad_cBio)$OS_MONTHS, colData(luad_cBio)$Cluster, max, na.rm = TRUE))
+
+surv_summary <- summary(fit_luad_cBio, times = specific_time)
+surv_prob_at_specific_time <- surv_summary$surv
+
+color_scheme <- brewer.pal(4, "Set2")
+
+survplot_luad_cBio = ggsurvplot(fit_luad_cBio, data = colData(luad_cBio), xlim = c(0, 60), 
+                                break.x.by = 12, risk.table = TRUE, palette = color_scheme)
+
+for(i in 1:length(surv_prob_at_specific_time)) {
+  label <- paste("Cluster", i, "Survival at", specific_time, "months:", round(surv_prob_at_specific_time[i], 2))
+  survplot_luad_cBio$plot <- survplot_luad_cBio$plot + 
+    annotate("text", x = Inf, y = 0.98 - (i * 0.05), label = label, hjust = 1, size = 3, color = color_scheme[i])
+}
+
+print(survplot_luad_cBio)
+
+
+clin_cBio$Cluster = factor(clin_cBio$Cluster, levels = c(2,1,3), label = c("C1", "C2", "C3"))
+
+
+######################################## GSVA ###########################################################
+
+luad_direct = read.table("PURITY/luad_tcga/data_mrna_seq_v2_rsem.txt", sep = "\t",header = T)
+
+luad_direct = luad_direct[!duplicated(luad_direct$Hugo_Symbol),]
+luad_direct = luad_direct[!is.na(luad_direct$Hugo_Symbol),]
+
+rownames(luad_direct)  = luad_direct$Hugo_Symbol
+entrez_table = luad_direct[, 1:2]
+luad_direct = luad_direct[, -c(1, 2)]
+
+colnames(luad_direct) <- gsub("\\.", "-", colnames(luad_direct))
+luad_direct = luad_direct[ , clin_cBio$sampleId]
+dim(luad_direct)
+
+
+luad_direct = log2(luad_direct + 1)
+luad_direct[1:5, 1:5]
+
+
+
+
+
+## msigdbr
+##KEGG
+KEGG_df_all <-  msigdbr(species = "Homo sapiens", # Homo sapiens or Mus musculus
+                        category = "C2",
+                        subcategory = "CP:KEGG") 
+KEGG_df <- dplyr::select(KEGG_df_all,gs_name,gs_exact_source,gene_symbol)
+kegg_list <- split(KEGG_df$gene_symbol, KEGG_df$gs_name) ##按照gs_name给gene_symbol分组
+                           
+
+luad_direct = as.matrix(luad_direct)
+
+gsva_mat_KEGG <- gsva(expr=luad_direct, 
+                      method = "gsva", 
+                      gset.idx.list= kegg_list, 
+                      kcdf="Gaussian" ,#"Gaussian" for logCPM,logRPKM,logTPM, "Poisson" for counts
+                      verbose=T, 
+                      BPPARAM = BiocParallel::SerialParam())
+
+
+cluster_groups <- clin_cBio$Cluster
+names(cluster_groups) <- clin_cBio$sampleId
+
+gsva_mat_KEGG <- gsva_mat_KEGG[, clin_cBio$sampleId]
+
+rownames(gsva_mat_KEGG) <- sub("^KEGG_", "", rownames(gsva_mat_KEGG))
+rownames(gsva_mat_KEGG) <- gsub("_", " ", rownames(gsva_mat_KEGG))
+
+group_annotation <- HeatmapAnnotation(
+  Cluster = cluster_groups,
+  col = list(Cluster = c("C1" = "cornflowerblue", "C2" = "tan1", "C3" = "red2")),
+  annotation_legend_param = list(title = "Cluster Group")
+)
+
+Heatmap(gsva_mat_KEGG,
+        name = "GSVA Score",
+        top_annotation = group_annotation,
+        show_row_names = F,
+        show_column_names = FALSE,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE, 
+        column_title = "Samples",
+        row_title = "Pathways",
+        heatmap_legend_param = list(title = "GSVA Score"),
+        col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),
+        column_split = cluster_groups  
+)
+
+########################################################### kruskal_test ###########################################################
+cluster_info = clin_cBio[, c("sampleId", "Cluster")]
+gsva_df <- as.data.frame(t(gsva_mat_KEGG))
+gsva_df$sampleId <- rownames(gsva_df)
+gsva_df <- merge(gsva_df, cluster_info, by = "sampleId")
+
+kruskal_results <- list()
+for (pathway in colnames(gsva_df)[-c(1, ncol(gsva_df))]) { 
+  kruskal_test <- kruskal.test(as.formula(paste(pathway, "~ Cluster")), data = gsva_df)
+  kruskal_results[[pathway]] <- kruskal_test$p.value
+}
+
+kruskal_results_df <- data.frame(Pathway = names(kruskal_results),
+                                 P.value = unlist(kruskal_results))
+significant_pathways <- kruskal_results_df %>%
+  filter(P.value < 0.05) %>%
+  arrange(P.value)
+
+gsva_df <- as.data.frame(gsva_df)
+
+
+top5_pathways <- significant_pathways$Pathway[1:30] 
+
+top5_pathways = c("BASE_EXCISION_REPAIR", "HOMOLOGOUS_RECOMBINATION", 
+                  "MISMATCH_REPAIR", "CELL_CYCLE",
+                  "DNA_REPLICATION", "NUCLEOTIDE_EXCISION_REPAIR",
+                  "GNRH_SIGNALING_PATHWAY", "VASCULAR_SMOOTH_MUSCLE_CONTRACTION")
+
+gsva_long <- gsva_df %>%
+  select(all_of(top5_pathways), Cluster) %>%
+  pivot_longer(cols = -Cluster, names_to = "Pathway", values_to = "GSVA_Score")
+
+
+ggplot(gsva_long, aes(x = Cluster, y = GSVA_Score, fill = Cluster)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "", x = "Cluster", y = "GSVA Score", fill = "Cluster Group") +
+  facet_wrap(~Pathway, scales = "free_y", ncol = 4)  + 
+  scale_fill_manual(values = c("cornflowerblue", "tan1", "red2"))+
+  theme(text = element_text(size = 14, face = "bold"),
+        panel.border = element_rect(colour = "black", fill = NA, size = 2),
+        axis.title = element_text(size = 14),  # Specific size for axis titles
+        plot.title = element_text(size = 14, hjust = 0.5),
+        axis.text.x = element_text(hjust = 1), legend.position = "bottom") +
+  ylim(-0.8, 0.8)
+
+heatmap_obj <- Heatmap(
+  gsva_mat_KEGG[top5_pathways, ],
+  name = "GSVA Score",
+  top_annotation = group_annotation,
+  show_row_names = TRUE,           
+  show_column_names = F,    
+  cluster_rows = TRUE,         
+  cluster_columns = TRUE,        
+  column_title = "Samples",
+  row_title = "Pathways",
+  row_names_gp = gpar(fontsize = 16), 
+  column_names_gp = gpar(fontsize = 16), 
+  col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")), 
+  column_split = cluster_groups,  
+  column_title_gp = gpar(fontsize = 16), 
+  heatmap_legend_param = list(
+    title = "GSVA Score",
+    title_gp = gpar(fontsize = 16),  
+    labels_gp = gpar(fontsize = 16),           
+    legend_direction = "horizontal",              
+    legend_height = unit(4, "cm")                   
+  )
+)
+
+
+group_annotation <- HeatmapAnnotation(
+  "Cluster Group" = cluster_groups,
+  col = list("Cluster Group" = c("C1" = "red", "C2" = "orange", "C3" = "blue")),
+  annotation_name_side = "right",      
+  annotation_name_gp= gpar(fontsize = 18),
+  annotation_legend_param = list(
+    title_gp = gpar(fontsize = 16),
+    labels_gp = gpar(fontsize = 16),
+    cluster_groups = list(
+      ncol = 3,
+      legend_direction = "horizontal",
+      labels_gp = gpar(fontsize = 18),
+      title_gp = gpar(fontsize = 18)
+    )
+  )
+)
+
+
+draw(
+  heatmap_obj,
+  heatmap_legend_side = "top",  
+  annotation_legend_side = "top"
+)
+############################################################ limma ###########################################################
+
+
+cluster_info <- cluster_info[order(match(cluster_info$sampleId, colnames(gsva_mat_KEGG))), ]  
+design <- model.matrix(~0 + cluster_info$Cluster)  
+colnames(design) <- levels(cluster_info$Cluster)
+
+
+gsva_mat_KEGG <- gsva_mat_KEGG[, cluster_info$sampleId]
+rownames(design) <- colnames(gsva_mat_KEGG)
+
+
+contrast_matrix <- makeContrasts(
+  C1_vs_C2 = C1 - C2,
+  C1_vs_C3 = C1 - C3,
+  C2_vs_C3 = C2 - C3,
+  levels = design
+)
+
+
+
+fit <- lmFit(gsva_mat_KEGG, design)
+fit2 <- contrasts.fit(fit, contrast_matrix)
+efit  <- eBayes(fit2)
+summary(decideTests(efit, p.value=0.05))
+topTable = topTable(efit, n = Inf)
+
+test = topTable[topTable$P.Value<0.05 & topTable$adj.P.Val <0.05 & abs(topTable$F) >=1,]
+
+
+# 1. C1 vs C2
+topPathways_C1_vs_C2 <- topTable(efit, coef = "C1_vs_C2", number = Inf, adjust.method = "fdr")
+significant_pathways_C1_vs_C2 <- topPathways_C1_vs_C2[topPathways_C1_vs_C2$P.Value < 0.05 & topPathways_C1_vs_C2$adj.P.Val < 0.05, ]
+
+ggplot(topPathways_C1_vs_C2, aes(x = logFC, y = -log10(P.Value))) +
+  geom_point(aes(color = adj.P.Val < 0.05 & P.Value < 0.05)) +
+  scale_color_manual(values = c("grey", "red")) +
+  labs(title = "Volcano Plot for C1 vs C2", x = "log2(Fold Change)", y = "-log10(P-value)") +
+  theme_minimal()
+
+
+# 2. C1 vs C3
+topPathways_C1_vs_C3 <- topTable(efit, coef = "C1_vs_C3", number = Inf, adjust.method = "fdr")
+significant_pathways_C1_vs_C3 <- topPathways_C1_vs_C3[topPathways_C1_vs_C3$P.Value < 0.05 & topPathways_C1_vs_C3$adj.P.Val < 0.05, ]
+
+ggplot(topPathways_C1_vs_C3, aes(x = logFC, y = -log10(P.Value))) +
+  geom_point(aes(color = adj.P.Val < 0.05 & P.Value < 0.05)) +
+  scale_color_manual(values = c("grey", "red")) +
+  labs(title = "Volcano Plot for C1 vs C3", x = "log2(Fold Change)", y = "-log10(P-value)") +
+  theme_minimal()
+
+# 3. C2 vs C3
+topPathways_C2_vs_C3 <- topTable(efit, coef = "C2_vs_C3", number = Inf, adjust.method = "fdr")
+significant_pathways_C2_vs_C3 <- topPathways_C2_vs_C3[topPathways_C2_vs_C3$P.Value < 0.05 & topPathways_C2_vs_C3$adj.P.Val < 0.05, ]
+
+ggplot(topPathways_C2_vs_C3, aes(x = logFC, y = -log10(P.Value))) +
+  geom_point(aes(color = adj.P.Val < 0.05 & P.Value < 0.05)) +
+  scale_color_manual(values = c("grey", "red")) +
+  labs(title = "Volcano Plot for C2 vs C3", x = "log2(Fold Change)", y = "-log10(P-value)") +
+  theme_minimal()
+
+
+pathways_C1_vs_C2 <- rownames(significant_pathways_C1_vs_C2)
+pathways_C1_vs_C3 <- rownames(significant_pathways_C1_vs_C3)
+pathways_C2_vs_C3 <- rownames(significant_pathways_C2_vs_C3)
+common_pathways <- Reduce(intersect, list(pathways_C1_vs_C2, pathways_C1_vs_C3, pathways_C2_vs_C3))
+
+
+group_annotation <- HeatmapAnnotation(
+  " " = cluster_groups,
+  col = list(" " = c("C1" = "cornflowerblue", "C2" = "tan1", "C3" = "red2")),
+  annotation_name_side = "right",      
+  annotation_name_gp= gpar(fontsize = 16),
+  annotation_legend_param = list(
+    " " = list(
+      at = c("C1", "C2", "C3"), 
+      labels = c("C1", "C2", "C3"), 
+      ncol = 3,
+      legend_direction = "horizontal",
+      labels_gp = gpar(fontsize = 16),
+      title_gp = gpar(fontsize = 16) 
+    )
+  )
+)
+group_annotation <- HeatmapAnnotation(
+  " " = cluster_groups,
+  col = list(" " = c("C1" = "cornflowerblue", "C2" = "tan1", "C3" = "red2"))
+)
+
+
+############################################# heatmap with dash line #############################################
+row_dist_matrix <- dist(gsva_mat_KEGG[rownames(topTable)[1:30],],, method = "euclidean")
+row_hc <- hclust(row_dist_matrix, method = "ward.D")
+
+heatmap_obj = Heatmap(gsva_mat_KEGG[common_pathways,],
+                      name = "GSVA Score",
+                      top_annotation = group_annotation,
+                      show_row_names = TRUE,
+                      show_column_names = FALSE,
+                      cluster_rows = TRUE,
+                      cluster_columns = TRUE, 
+                      column_title = "Samples",
+                      row_title = "Pathways",
+                      row_names_gp = gpar(fontsize = 16),
+                      column_names_gp = gpar(fontsize = 16), 
+                      col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),
+                      column_split = cluster_groups,  
+                      row_split = cutree(row_hc, k = 4),
+                      row_names_max_width = unit(14.5,"cm"),
+                      column_title_gp = gpar(fontsize = 16), 
+                      heatmap_legend_param = list(
+                        title = "GSVA Score",
+                        title_gp = gpar(fontsize = 16), 
+                        labels_gp = gpar(fontsize = 16),                  
+                        legend_direction = "horizontal",                  
+                        legend_height = unit(4, "cm")                   
+                      )
+)
+
+
+ht1 = draw(
+  heatmap_obj,
+  show_annotation_legend = FALSE ,
+  heatmap_legend_side = "top" 
+  #annotation_legend_side = "top"
+)
+grid.lines(c(0.03, 0.5), c(0.413, 0.413), gp = gpar(lty = 2, lwd = 4, col = "navy"))
+grid.lines(c(0.03, 0.5), c(0.580, 0.580), gp = gpar(lty = 2, lwd = 4, col = "navy"))
+grid.lines(c(0.03, 0.5), c(0.305, 0.305), gp = gpar(lty = 2, lwd = 4, col = "navy"))
+##########################################################################################
+
+
+############################################# heatmap with color bar #############################################
+
+row_annotation = rowAnnotation(foo = anno_empty(border = FALSE,  
+                                                width = unit(1, "mm")))
+
+heatmap_obj = Heatmap(gsva_mat_KEGG[rownames(topTable)[1:30],],
+                      name = "GSVA Score",
+                      top_annotation = group_annotation,
+                      right_annotation = row_annotation,
+                      show_row_names = TRUE,
+                      show_column_names = FALSE,
+                      cluster_rows = TRUE,
+                      cluster_columns = TRUE, 
+                      column_title = "Samples",
+                      row_title = "Pathways",
+                      row_names_gp = gpar(fontsize = 18),
+                      column_names_gp = gpar(fontsize = 18),
+                      col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),
+                      column_split = cluster_groups, 
+                      row_split = cutree(row_hc, k = 4),
+                      row_names_max_width = unit(17,"cm"),
+                      column_title_gp = gpar(fontsize = 18), 
+                      heatmap_legend_param = list(
+                        title = "GSVA Score",
+                        title_gp = gpar(fontsize = 18),  
+                        labels_gp = gpar(fontsize = 18),                 
+                        legend_direction = "horizontal",                   
+                        legend_height = unit(4, "cm")                     
+                      )
+)
+
+# 绘制热图
+ht1 = draw(
+  heatmap_obj,
+  show_annotation_legend = FALSE ,
+  heatmap_legend_side = "top" 
+  #annotation_legend_side = "top" 
+)
+
+fill_corlors = c("grey70", "green3", "black", "pink1")
+
+for(i in 1:4) {
+  decorate_annotation("foo", slice = i, {
+    grid.rect(x = 0, width = unit(2, "mm"), gp = gpar(fill = fill_corlors[i], col = NA), just = "left")
+  })
+}
+##########################################################################################
+
+setwd(dir = "C:\\JJJJialu\\GSE131907")
+library(magick)
+library(ggimage)
+
+figure =  image_read("LUAD-slides_plots/GSVA.png")
+
+figure1 = image_crop(figure, "500x75+0+50")
+figure2 = image_crop(figure, "500x50+200+0")
+figuredown = image_crop(figure, "1150x775+0+125")
+
+white_space = image_blank(width = 500, height = 25, color = "white")
+figure2 = image_append(c(figure2, white_space), stack = TRUE)
+figureup = image_append(c(figure1, figure2), stack = F)
+white_space = image_blank(width = 150, height = 75, color = "white")
+figureup = image_append(c(figureup, white_space), stack = F)
+figure = image_append(c(figureup, figuredown), stack = T)
+figure
+image_write(figure, "LUAD-slides_plots/GSVA-update.png")
+############################################################ significant pathways plot ############################################################
+
+my_comparisons = list( c("C1", "C2"), c("C1", "C3"), c("C2", "C3") )
+
+
+BASE_EXCISION_REPAIR_df = data.frame(gsva_df[,c("sampleId","BASE_EXCISION_REPAIR")])
+BASE_EXCISION_REPAIR_df$Cluster = cluster_groups[BASE_EXCISION_REPAIR_df$sampleId]
+p1 = ggplot(BASE_EXCISION_REPAIR_df, aes(x = Cluster, y = BASE_EXCISION_REPAIR, color = Cluster)) +
+  geom_boxplot(size = 1.5) +
+  theme_minimal() +
+  scale_color_manual(values =  c("cornflowerblue", "tan1", "red2")) +
+  labs(title = "BASE EXCISION\nREPAIR", x  = "", y = "GSVA Score") + 
+  theme(text = element_text(size = 22),
+        axis.title = element_text(size = 22),  # Specific size for axis titles
+        plot.title = element_text(size = 22, hjust = 0.5)) +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox.test", method.args = list(alternative = "two.sided"), size = 8, hide.ns = TRUE, 
+                     label = "p.signif", label.y = c(0.55, 0.7, 0.85)) +
+  coord_cartesian(ylim = c(-0.6, 1)) + labs(color = " ")
+
+
+
+HOMOLOGOUS_RECOMBINATION_df = data.frame(gsva_df[,c("sampleId","HOMOLOGOUS_RECOMBINATION")])
+HOMOLOGOUS_RECOMBINATION_df$Cluster = cluster_groups[HOMOLOGOUS_RECOMBINATION_df$sampleId]
+p2 = ggplot(HOMOLOGOUS_RECOMBINATION_df, aes(x = Cluster, y = HOMOLOGOUS_RECOMBINATION, color = Cluster)) +
+  geom_boxplot(size = 1.5) +
+  theme_minimal() +
+  scale_color_manual(values =  c("cornflowerblue", "tan1", "red2")) +
+  labs(title = "HOMOLOGOUS\nRECOMBINATION", x  = "", y = "") + 
+  theme(text = element_text(size = 22),
+        axis.title = element_text(size = 22), 
+        plot.title = element_text(size = 22, hjust = 0.5)) +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox.test", method.args = list(alternative = "two.sided"), size = 8, hide.ns = TRUE, 
+                     label = "p.signif", label.y = c(0.55, 0.7, 0.85)) +
+  coord_cartesian(ylim = c(-0.6, 1)) + labs(color = " ")
+
+
+MISMATCH_REPAIR_df = data.frame(gsva_df[,c("sampleId","MISMATCH_REPAIR")])
+MISMATCH_REPAIR_df$Cluster = cluster_groups[MISMATCH_REPAIR_df$sampleId]
+p3 = ggplot(MISMATCH_REPAIR_df, aes(x = Cluster, y = MISMATCH_REPAIR, color = Cluster)) +
+  geom_boxplot(size = 1.5) +
+  theme_minimal() +
+  scale_color_manual(values =  c("cornflowerblue", "tan1", "red2")) +
+  labs(title = "MISMATCH REPAIR\n", x  = "", y = "") + 
+  theme(text = element_text(size = 22),
+        axis.title = element_text(size = 22), 
+        plot.title = element_text(size = 22, hjust = 0.5)) +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox.test", method.args = list(alternative = "two.sided"), size = 8, hide.ns = TRUE, 
+                     label = "p.signif", label.y = c(0.55, 0.7, 0.85)) +
+  coord_cartesian(ylim = c(-0.6, 1)) + labs(color = " ")
+
+
+CELL_CYCLE_df = data.frame(gsva_df[,c("sampleId","CELL_CYCLE")])
+CELL_CYCLE_df$Cluster = cluster_groups[CELL_CYCLE_df$sampleId]
+p4 = ggplot(CELL_CYCLE_df, aes(x = Cluster, y = CELL_CYCLE, color = Cluster)) +
+  geom_boxplot(size = 1.5) +
+  theme_minimal() +
+  scale_color_manual(values =  c("cornflowerblue", "tan1", "red2")) +
+  labs(title = "CELL CYCLE\n", x  = "", y = "") + 
+  theme(text = element_text(size = 22),
+        axis.title = element_text(size = 22), 
+        plot.title = element_text(size = 22, hjust = 0.5)) +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox.test", method.args = list(alternative = "two.sided"), size = 8, hide.ns = TRUE, 
+                     label = "p.signif", label.y = c(0.55, 0.7, 0.85)) +
+  coord_cartesian(ylim = c(-0.6, 1)) + labs(color = " ")
+
+
+DNA_REPLICATION_df = data.frame(gsva_df[,c("sampleId","DNA_REPLICATION")])
+DNA_REPLICATION_df$Cluster = cluster_groups[DNA_REPLICATION_df$sampleId]
+p5 = ggplot(DNA_REPLICATION_df, aes(x = Cluster, y = DNA_REPLICATION, color = Cluster)) +
+  geom_boxplot(size = 1.5) +
+  theme_minimal() +
+  scale_color_manual(values =  c("cornflowerblue", "tan1", "red2")) +
+  labs(title = "DNA REPLICATION\n", x  = "", y = "GSVA Score") + 
+  theme(text = element_text(size = 22),
+        axis.title = element_text(size = 22), 
+        plot.title = element_text(size = 22, hjust = 0.5)) +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox.test", method.args = list(alternative = "two.sided"), size = 8, hide.ns = TRUE, 
+                     label = "p.signif", label.y = c(0.55, 0.7, 0.85)) +
+  coord_cartesian(ylim = c(-0.6, 1)) + labs(color = " ")
+
+
+NUCLEOTIDE_EXCISION_REPAIR_df = data.frame(gsva_df[,c("sampleId","NUCLEOTIDE_EXCISION_REPAIR")])
+NUCLEOTIDE_EXCISION_REPAIR_df$Cluster = cluster_groups[NUCLEOTIDE_EXCISION_REPAIR_df$sampleId]
+p6 = ggplot(NUCLEOTIDE_EXCISION_REPAIR_df, aes(x = Cluster, y = NUCLEOTIDE_EXCISION_REPAIR, color = Cluster)) +
+  geom_boxplot(size = 1.5) +
+  theme_minimal() +
+  scale_color_manual(values =  c("cornflowerblue", "tan1", "red2")) +
+  labs(title = "NUCLEOTIDE EXCISION\nREPAIR", x  = "", y = "") + 
+  theme(text = element_text(size = 22),
+        axis.title = element_text(size = 22), 
+        plot.title = element_text(size = 22, hjust = 0.5)) +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox.test", method.args = list(alternative = "two.sided"), size = 8, hide.ns = TRUE, 
+                     label = "p.signif", label.y = c(0.55, 0.7, 0.85)) +
+  coord_cartesian(ylim = c(-0.6, 1)) + labs(color = " ")
+
+
+GNRH_SIGNALING_PATHWAY_df = data.frame(gsva_df[,c("sampleId","GNRH_SIGNALING_PATHWAY")])
+GNRH_SIGNALING_PATHWAY_df$Cluster = cluster_groups[GNRH_SIGNALING_PATHWAY_df$sampleId]
+p7 = ggplot(GNRH_SIGNALING_PATHWAY_df, aes(x = Cluster, y = GNRH_SIGNALING_PATHWAY, color = Cluster)) +
+  geom_boxplot(size = 1.5) +
+  theme_minimal() +
+  scale_color_manual(values =  c("cornflowerblue", "tan1", "red2")) +
+  labs(title = "GNRH SIGNALING\nPATHWAY", x  = "", y = "") + 
+  theme(text = element_text(size = 22),
+        axis.title = element_text(size = 22), 
+        plot.title = element_text(size = 22, hjust = 0.5)) +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox.test", method.args = list(alternative = "two.sided"), size = 8, hide.ns = TRUE, 
+                     label = "p.signif", label.y = c(0.55, 0.7, 0.85)) +
+  coord_cartesian(ylim = c(-0.6, 1)) + labs(color = " ")
+
+
+VASCULAR_SMOOTH_MUSCLE_CONTRACTION_df = data.frame(gsva_df[,c("sampleId","VASCULAR_SMOOTH_MUSCLE_CONTRACTION")])
+VASCULAR_SMOOTH_MUSCLE_CONTRACTION_df$Cluster = cluster_groups[VASCULAR_SMOOTH_MUSCLE_CONTRACTION_df$sampleId]
+p8 = ggplot(VASCULAR_SMOOTH_MUSCLE_CONTRACTION_df, aes(x = Cluster, y = VASCULAR_SMOOTH_MUSCLE_CONTRACTION, color = Cluster)) +
+  geom_boxplot(size = 1.5) +
+  theme_minimal() +
+  scale_color_manual(values =  c("cornflowerblue", "tan1", "red2")) +
+  labs(title = "VASCULAR SMOOTH\nMUSCLE CONTRACTION", x  = "", y = "") + 
+  theme(text = element_text(size = 22),
+        axis.title = element_text(size = 22), 
+        plot.title = element_text(size = 22, hjust = 0.5)) +
+  stat_compare_means(comparisons = my_comparisons, method = "wilcox.test", method.args = list(alternative = "two.sided"), size = 8, hide.ns = TRUE, 
+                     label = "p.signif", label.y = c(0.55, 0.7, 0.85)) +
+  coord_cartesian(ylim = c(-0.6, 1)) + labs(color = " ")
+
+
+combined_plot <- ggarrange(
+  p1, p2, p3, p4,
+  p5, p6, p7, p8,
+  ncol = 4, nrow = 2, 
+  common.legend = TRUE,
+  legend = "bottom",
+  labels = c("b", "c", "d", "e",
+             "f", "g", "h", "i"),
+  font.label = list(size = 24)
+)
+combined_plot
