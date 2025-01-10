@@ -16,7 +16,6 @@ library(ggimage)
 
 devtools::load_all("C:\\Program Files\\R\\R-4.3.2\\monocle")
 
-
 # load dataset
 cell_annotation = read.table(gzfile("input/GSE131907_Lung_Cancer_cell_annotation.txt.gz"), sep = "\t", header = TRUE)
 feature_summary = read.csv("input/GSE131907_Lung_Cancer_Feature_Summary-modify.csv", row.names = 1)
@@ -27,7 +26,8 @@ rownames(annotation) = annotation$Index
 annotation$rename.Tissue.origins = annotation$Tissue.origins
 annotation[annotation$rename.Tissue.origins == "tL/B", ]$rename.Tissue.origins  = "Late-Stage"
 annotation[annotation$rename.Tissue.origins == "tLung", ]$rename.Tissue.origins = "Early-Stage"
-annotation[annotation$rename.Tissue.origins == "nLung", ]$rename.Tissue.origins = "Normal-Stage"
+annotation[annotation$rename.Tissue.origins == "nLung", ]$rename.Tissue.origins = "Normal"
+annotation[annotation$rename.Tissue.origins == "Normal",]$Stages = "Normal"
 
 raw_data = readRDS("input/GSE131907_Lung_Cancer_raw_UMI_matrix.rds")
 ref_genome = readRDS("input/refgenome_example.Rds")
@@ -153,30 +153,358 @@ Plot_P0028 = ggplot(ep_cell_info[ep_cell_info$Patient.id == "P0028",],  aes(x=MS
 
 ggarrange(Plot_p0019, Plot_P0028, common.legend = T, legend="bottom")
 
+EP_early_stage = ep_cell_info[ep_cell_info$Tissue.origins == "tLung",]
+EP_advan_stage = ep_cell_info[ep_cell_info$Tissue.origins == "tL/B",]
+
+cat("Early stage EP cell total patients: ", length(unique(EP_early_stage$Patient.id)), "\n")
+cat("Adv stage EP cell total patients: ", length(unique(EP_advan_stage$Patient.id)), "\n\n")
+
+total_early_malignant = sum(EP_early_stage$cell_index == "Tumor")
+total_early_nonmalignant =  sum(EP_early_stage$cell_index == "Nontumor")
+
+cat("EP early stage, # of malignant:     ",  total_early_malignant, "/", nrow(EP_early_stage), " = ",
+    round(total_early_malignant/nrow(EP_early_stage) *100, 2) ,"%\n")
+
+cat("EP early stage, # of non-malignant: ",  total_early_nonmalignant, "/", nrow(EP_early_stage), " = ",
+    round(total_early_nonmalignant/nrow(EP_early_stage) *100, 2) ,"%")
+
+total_adv_malignant = sum(EP_advan_stage$cell_index == "Tumor")
+total_adv_nonmalignant =  sum(EP_advan_stage$cell_index == "Nontumor")
+
+cat("EP early stage, # of malignant:     ",  total_adv_malignant, "/", nrow(EP_advan_stage), " = ",
+    round(total_adv_malignant/nrow(EP_advan_stage) *100, 2) ,"%\n")
+
+cat("EP early stage, # of non-malignant: ",  total_adv_nonmalignant, "/", nrow(EP_advan_stage), " = ",
+    round(total_adv_nonmalignant/nrow(EP_advan_stage) *100, 2) ,"%")
 
 
+# LUNG tissure without Undetermined type samples
+
+lung_tissue_seu_filtered = subset(lung_tissue_seu, subset = Cell_type != "Undetermined")
+lung_tissue_seu_filtered[["percent.mt"]] = PercentageFeatureSet(lung_tissue_seu_filtered, pattern = "^MT-")
+#QC visualization 
+VlnPlot(lung_tissue_seu_filtered, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size=0) 
+
+lung_tissue_seu_filtered = subset(lung_tissue_seu_filtered, subset = nFeature_RNA > 200 & nFeature_RNA < 5000 & percent.mt < 20)
+VlnPlot(lung_tissue_seu_filtered, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size=0) 
+
+lung_tissue_seu_filtered = NormalizeData(lung_tissue_seu_filtered, normalization.method = "LogNormalize", scale.factor = 1e4)
+lung_tissue_seu_filtered
+
+lung_tissue_seu_filtered <- FindVariableFeatures(lung_tissue_seu_filtered, selection.method = "vst", nfeatures = 3000)
+top10_VariableFeatures <- head(VariableFeatures(lung_tissue_seu_filtered), 10)
+plot3 <- VariableFeaturePlot(lung_tissue_seu_filtered)
+plot4 <- LabelPoints(plot = plot3, points = top10_VariableFeatures, repel = TRUE)
+plot4
+
+lung_tissue_seu_filtered = ScaleData(lung_tissue_seu_filtered, do.scale = FALSE, do.center = TRUE, scale.max = 10)
+lung_tissue_seu_filtered = RunPCA(lung_tissue_seu_filtered, features = VariableFeatures(object = lung_tissue_seu_filtered))
+
+ElbowPlot(lung_tissue_seu_filtered)
+
+lung_tissue_seu_filtered <- FindNeighbors(lung_tissue_seu_filtered, reduction = "pca", dims = 1:20)
+lung_tissue_seu_filtered <- FindClusters(lung_tissue_seu_filtered, resolution = 0.2) #resolution = 0.02 for level1 of annotation
+
+lung_tissue_seu_filtered <- RunUMAP(lung_tissue_seu_filtered, reduction = "pca", dims = 1:20)
+
+DimPlot(lung_tissue_seu_filtered, reduction = "umap", label = T)
+DimPlot(lung_tissue_seu_filtered, reduction = "umap", group.by = "Cell_type", label = T, repel = T) +
+  xlim(-15,20) +
+  ggtitle("Lung tumor tissue cells UMAP") +
+  theme(legend.position = "none",
+        legend.text = element_text(size = 22),
+        axis.title = element_text(size = 22),
+        axis.text = element_text(size = 22),
+        text = element_text(size = 22, face = "bold")
+  )
+DimPlot(lung_tissue_seu_filtered, reduction = "umap", group.by = "rename.Tissue.origins", label = T)
+
+selected_colors = c("#A6CEE3", "#33A02C", "#FF7F00", "#CAB2D6","#B15928")
+scales::show_col(selected_colors)
 
 
+# Lung stromal cells
+
+stromal_subset = subset(lung_tissue_seu_filtered, subset = Cell_type %in% c("Endothelial cells", "Fibroblasts"))
+
+stromal_subset = NormalizeData(stromal_subset, normalization.method = "LogNormalize", scale.factor = 1e4)
+stromal_subset <- FindVariableFeatures(stromal_subset, selection.method = "vst", nfeatures = 3000)
+top10_VariableFeatures <- head(VariableFeatures(stromal_subset), 10)
+plot7 <- VariableFeaturePlot(stromal_subset)
+plot8 <- LabelPoints(plot = plot7, points = top10_VariableFeatures, repel = TRUE)
+
+stromal_subset = ScaleData(stromal_subset, do.scale = FALSE, do.center = TRUE, scale.max = 10)
+stromal_subset = RunPCA(stromal_subset, features = VariableFeatures(object = stromal_subset))
+ElbowPlot(stromal_subset)
+
+stromal_subset <- FindNeighbors(stromal_subset, reduction = "pca", dims = 1:20)
+stromal_subset <- FindClusters(stromal_subset, resolution = 0.01) #resolution = 0.02 for level1 of annotation
+stromal_subset <- RunUMAP(stromal_subset, reduction = "pca", dims = 1:20)
+
+DimPlot(stromal_subset, reduction = "umap", label = T) +
+  ggtitle("UMAP clustering of Stromal cells") + 
+  theme(plot.title = element_text(hjust = 0.5))
+DimPlot(stromal_subset, reduction = "umap", group.by = "Cell_type", label = T)
+DimPlot(stromal_subset, reduction = "umap", group.by = "rename.Tissue.origins", label = T) +
+  ggtitle("UMAP clustering of Stromal cells colored by Stages") + 
+  scale_color_manual(values = selected_colors[1:3]) + 
+  theme(plot.title = element_text(hjust = 0.5))
+DimPlot(stromal_subset, reduction = "umap", group.by = "Stages", label = T) + scale_color_manual(values = brewer.pal(n = 7, name = "Dark2"))
 
 
+stromal_subset_matrix = as.matrix(stromal_subset@assays$RNA$counts)
+stromal_subset_ref_genome = ref_genome[rownames(stromal_subset_matrix),]
+stromal_subset_ref_genome$gene_short_name = rownames(stromal_subset_ref_genome)
+
+stromal_subset_cell_annotation = stromal_subset@meta.data
+
+stromal_subset_fd <- new("AnnotatedDataFrame", data = stromal_subset_ref_genome)
+stromal_subset_pd = new("AnnotatedDataFrame", data = stromal_subset_cell_annotation)
+
+stromal_subset_cds =  newCellDataSet(as(stromal_subset_matrix, "sparseMatrix"),
+                              phenoData = stromal_subset_pd, featureData = stromal_subset_fd,
+                              expressionFamily = negbinomial.size())
+stromal_subset_cds = estimateSizeFactors(stromal_subset_cds)
+stromal_subset_cds = estimateDispersions(stromal_subset_cds)
+stromal_subset_express_genes = VariableFeatures(stromal_subset)
+stromal_subset_cds = setOrderingFilter(stromal_subset_cds, stromal_subset_express_genes)
+plot_ordering_genes(stromal_subset_cds)
+stromal_subset_cds = reduceDimension(stromal_subset_cds, max_components = 2, method = "DDRTree")
+stromal_subset_cds <- orderCells(stromal_subset_cds)
+plot_stromal = plot_cell_trajectory(stromal_subset_cds, color_by = "State") + 
+  ggtitle("Stromal cells Trajectory") +
+  theme(plot.title = element_text(hjust = 0.5))
+plot_stromal
+
+stromal_tj_1 = plot_cell_trajectory(stromal_subset_cds, color_by = "rename.Tissue.origins")+ #, cell_size = 4) + 
+  scale_color_manual(values = c("turquoise", "#FFD92F", "#A6CEE3")) + facet_wrap(~rename.Tissue.origins)+
+  guides(color = guide_legend(title = "Stage", nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") + 
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5, size = 18),
+        legend.title = element_text(size = 18, face = "bold"), 
+        legend.text = element_text(size = 18, face = "bold"),
+        axis.title.x = element_text(size = 18, face = "bold"),
+        axis.text.x = element_text(size = 18, face = "bold"),
+        axis.title.y = element_text(size = 18, face = "bold"),
+        axis.text.y = element_text(size = 18, face = "bold"),
+        strip.text = element_text(size = 18, face = "bold")
+  )
+
+stromal_tj_2 = plot_cell_trajectory(stromal_subset_cds, color_by = "Stages")+ 
+  scale_color_manual(values = c("#66C2A5","#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F","#A6CEE3")) +facet_wrap(~Stages)+
+  guides(color = guide_legend(nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5, size = 18),
+        legend.title = element_text(size = 18, face = "bold"), 
+        legend.text = element_text(size = 18, face = "bold"),
+        axis.title.x = element_text(size = 18, face = "bold"),
+        axis.text.x = element_text(size = 18, face = "bold"),
+        axis.title.y = element_text(size = 18, face = "bold"),
+        axis.text.y = element_text(size = 18, face = "bold"),
+        strip.text = element_text(size = 18, face = "bold")
+  )
+
+p <- ggarrange(stromal_tj_1, stromal_tj_2, ncol = 2)
+p_annotated <- annotate_figure(
+  p,
+  top = text_grob("Stromal cell trajectory by stages", 
+                  face = "bold", size = 18)
+)
+p_annotated
 
 
+stromal_subset$State = stromal_subset_cds$State
+DimPlot(stromal_subset, reduction = "umap", group.by = "State", label = T)
+
+counts <- stromal_subset@meta.data %>% 
+  group_by(State, rename.Tissue.origins) %>%
+  dplyr::summarise(Count = n())
+
+# Calculate the total count for each State
+total_counts <- stromal_subset@meta.data %>% 
+  group_by(State) %>%
+  dplyr::summarise(Total = n())
+
+# Merge the total counts with the original counts to get the percentage
+counts <- counts %>%
+  left_join(total_counts, by = "State") %>%
+  mutate(Percentage = (Count / Total) * 100)
+
+# Plot with percentages stacked
+ggplot(counts, aes(x = factor(State), y = Percentage, fill = rename.Tissue.origins)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(name = "Stage", values = selected_colors[c(1:3)]) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(x = "Trajectory branch", y = "Percentage", fill = "Tissue Origins") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 
+# immune cells lung tissue
+immune_subset = subset(lung_tissue_seu_filtered, subset = Cell_type %in% c("B lymphocytes", "T lymphocytes", "NK cells", "MAST cells", "Myeloid cells"))
+immune_subset = NormalizeData(immune_subset, normalization.method = "LogNormalize", scale.factor = 1e4)
+immune_subset <- FindVariableFeatures(immune_subset, selection.method = "vst", nfeatures = 3000)
+top10_VariableFeatures <- head(VariableFeatures(immune_subset), 10)
+plot7 <- VariableFeaturePlot(immune_subset)
+plot8 <- LabelPoints(plot = plot7, points = top10_VariableFeatures, repel = TRUE)
+plot8
+
+immune_subset = ScaleData(immune_subset, do.scale = FALSE, do.center = TRUE, scale.max = 10)
+immune_subset = RunPCA(immune_subset, features = VariableFeatures(object = immune_subset))
+ElbowPlot(immune_subset)
+
+immune_subset <- FindNeighbors(immune_subset, reduction = "pca", dims = 1:20)
+immune_subset <- FindClusters(immune_subset, resolution = 0.01) #resolution = 0.02 for level1 of annotation
+immune_subset <- RunUMAP(immune_subset, reduction = "pca", dims = 1:20)
+
+DimPlot(immune_subset, reduction = "umap", label = T) +ggtitle("UMAP clustering of Immune cells") + theme(plot.title = element_text(hjust = 0.5))
+DimPlot(immune_subset, reduction = "umap", group.by = "Cell_type", label = T)
+DimPlot(immune_subset, reduction = "umap", group.by = "rename.Tissue.origins", label = T)+ggtitle("UMAP clustering of Immune cells") +
+  scale_color_manual(values = selected_colors[1:3]) + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+DimPlot(immune_subset, reduction = "umap", group.by = "Stages", label = T, repel = T) + scale_color_manual(values = brewer.pal(n = 7, name = "Dark2"))
 
 
+tmp <- sample(immune_subset@meta.data$Index, 20000) 
+immune_subset8000 <- immune_subset[ ,tmp]
+
+immune_subset_matrix = as.matrix(immune_subset8000@assays$RNA$counts)
+immune_subset_ref_genome = ref_genome[rownames(immune_subset_matrix),]
+immune_subset_ref_genome$gene_short_name = rownames(immune_subset_ref_genome)
+
+immune_subset_cell_annotation = immune_subset8000@meta.data
+
+immune_subset_fd <- new("AnnotatedDataFrame", data = immune_subset_ref_genome)
+immune_subset_pd = new("AnnotatedDataFrame", data = immune_subset_cell_annotation)
+immune_subset_cds =  newCellDataSet(as(immune_subset_matrix, "sparseMatrix"),
+                              phenoData = immune_subset_pd, featureData = immune_subset_fd,
+                              expressionFamily = negbinomial.size())
+
+immune_subset_cds = estimateSizeFactors(immune_subset_cds)
+immune_subset_cds = estimateDispersions(immune_subset_cds)
+
+immune_subset_express_genes = VariableFeatures(immune_subset8000)
+immune_subset_cds = setOrderingFilter(immune_subset_cds, immune_subset_express_genes)
+plot_ordering_genes(immune_subset_cds)
+
+immune_subset_cds = reduceDimension(immune_subset_cds, max_components = 2, method = "DDRTree")
+
+immune_subset_cds <- orderCells(immune_subset_cds)
+
+plot_immune_subset_cds = plot_cell_trajectory(immune_subset_cds, color_by = "State") + 
+  ggtitle("Immune cells Trajectory") +
+  theme(plot.title = element_text(hjust = 0.5))
+plot_immune_subset_cds
+
+immune_tj_1 = plot_cell_trajectory(immune_subset_cds, color_by = "rename.Tissue.origins")+ #, cell_size = 4) + 
+  scale_color_manual(values = c("turquoise", "#FFD92F", "#A6CEE3")) + facet_wrap(~rename.Tissue.origins)+
+  guides(color = guide_legend(title = "Stage", nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") + 
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5, size = 18),
+        legend.title = element_text(size = 18, face = "bold"), 
+        legend.text = element_text(size = 18, face = "bold"),
+        axis.title.x = element_text(size = 18, face = "bold"),
+        axis.text.x = element_text(size = 18, face = "bold"),
+        axis.title.y = element_text(size = 18, face = "bold"),
+        axis.text.y = element_text(size = 18, face = "bold"),
+        strip.text = element_text(size = 18, face = "bold")
+  )
+
+immune_tj_2 = plot_cell_trajectory(immune_subset_cds, color_by = "Stages")+ 
+  scale_color_manual(values = c("#66C2A5","#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F","#A6CEE3")) +facet_wrap(~Stages)+
+  guides(color = guide_legend(nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5, size = 18),
+        legend.title = element_text(size = 18, face = "bold"), 
+        legend.text = element_text(size = 18, face = "bold"),
+        axis.title.x = element_text(size = 18, face = "bold"),
+        axis.text.x = element_text(size = 18, face = "bold"),
+        axis.title.y = element_text(size = 18, face = "bold"),
+        axis.text.y = element_text(size = 18, face = "bold"),
+        strip.text = element_text(size = 18, face = "bold")
+  )
 
 
+p <- ggarrange(stromal_tj_1, stromal_tj_2, ncol = 2)
+p_annotated <- annotate_figure(
+  p,
+  top = text_grob("Stromal cell trajectory by stages", 
+                  face = "bold", size = 18, vjust = 2)) +
+  theme(
+    plot.margin = margin(t = 5, r = 5, b = 15, l = 5)  # 单位默认为 "pt"
+  )
+p_annotated
 
 
+immune_tj_1 = immune_tj_1 + theme(plot.margin = margin(t = 5, r = 10, b = 15, l = 5))
+immune_tj_2 = immune_tj_2 + theme(plot.margin = margin(t = 5, r = 10, b = 15, l = 5))
 
+p1 <- ggarrange(immune_tj_1, immune_tj_2, ncol = 2)
+p1_annotated <- annotate_figure(
+  p1,
+  top = text_grob("Immune cell trajectory by stages", 
+                  face = "bold", size = 18, vjust = 2))
+p1_annotated
 
+ggarrange(p_annotated, p1_annotated, ncol = 1)
 
+immune_subset8000$State = immune_subset_cds$State
+DimPlot(immune_subset8000, reduction = "umap", group.by = "State", label = T)
 
+counts <- immune_subset8000@meta.data %>% 
+  group_by(State, Stages) %>%
+  dplyr::summarise(Count = n())
 
+# Calculate the total count for each State
+total_counts <- immune_subset8000@meta.data %>% 
+  group_by(State) %>%
+  dplyr::summarise(Total = n())
 
+# Merge the total counts with the original counts to get the percentage
+counts <- counts %>%
+  left_join(total_counts, by = "State") %>%
+  mutate(Percentage = (Count / Total) * 100)
 
+# Plot with percentages stacked
+ggplot(counts, aes(x = factor(State), y = Percentage, fill = Stages)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(values = selected_colors[1:6])+
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(x = "Trajectory branch", y = "Percentage", fill = "Stages") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
+# EP cells UMAP visualization
+
+epithelial_seu = subset(lung_tissue_seu_filtered, subset = Cell_type == "Epithelial cells")
+
+epithelial_seu@meta.data$cell_index = "Normal"
+epithelial_seu@meta.data[epithelial_seu@meta.data$Index %in% result[result$cell_index == "Tumor",]$Index,]$cell_index = "Tumor"
+epithelial_seu@meta.data[epithelial_seu@meta.data$Index %in% result[result$cell_index == "Nontumor",]$Index,]$cell_index = "Nontumor"
+epithelial_seu = NormalizeData(epithelial_seu, normalization.method = "LogNormalize", scale.factor = 1e4)
+epithelial_seu <- FindVariableFeatures(epithelial_seu, selection.method = "vst", nfeatures = 3000)
+
+epithelial_seu = ScaleData(epithelial_seu, do.scale = FALSE, do.center = TRUE, scale.max = 10)
+epithelial_seu = RunPCA(epithelial_seu, features = VariableFeatures(object = epithelial_seu))
+ElbowPlot(epithelial_seu)
+
+epithelial_seu <- FindNeighbors(epithelial_seu, reduction = "pca", dims = 1:20)
+epithelial_seu <- FindClusters(epithelial_seu, resolution = 0.01) #resolution = 0.02 for level1 of annotation
+epithelial_seu <- RunUMAP(epithelial_seu, reduction = "pca", dims = 1:20)
+
+DimPlot(epithelial_seu, reduction = "umap", label = T) +
+  ggtitle("UMAP clustering of Epithelial cells") + 
+  theme(plot.title = element_text(hjust = 0.5))
+DimPlot(epithelial_seu, reduction = "umap", group.by = "Stages", label = T, repel = T)
+DimPlot(epithelial_seu, reduction = "umap", group.by = "rename.Tissue.origins", label = T) +
+  ggtitle("UMAP clustering of Epithelial cells colored by Stages") + 
+  scale_color_manual(values = selected_colors[1:3]) + 
+  theme(plot.title = element_text(hjust = 0.5))
 
 
 
