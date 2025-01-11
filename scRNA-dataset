@@ -615,7 +615,9 @@ ggplot(counts, aes(x = factor(State), y = Percentage, fill = Stages)) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-
+DEGs_0_before_wilcox <- FindMarkers(object = ep_clear_subset, ident.1 = 0, ident.2 = NULL,test.use = "wilcox", min.pct = 0.25, logfc.threshold = 0.25)
+DEGs_0_wilcox <- DEGs_0_before_wilcox[DEGs_0_before_wilcox$p_val < 0.01 & DEGs_0_before_wilcox$p_val_adj < 0.01 & DEGs_0_before_wilcox$avg_log2FC > 1,]
+write.csv(DEGs_0_wilcox, file = "DEGs_0_wilcox.csv")
 
 # InferCNV
 library("AnnoProbe")
