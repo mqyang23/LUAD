@@ -179,7 +179,7 @@ cat("EP early stage, # of non-malignant: ",  total_adv_nonmalignant, "/", nrow(E
 
 
 # LUNG tissure without Undetermined type samples
-
+#lung_tissue_seu_filtered = subset(lung_tissue_seu, subset = Tissue.origins != "nLung")
 lung_tissue_seu_filtered = subset(lung_tissue_seu, subset = Cell_type != "Undetermined")
 lung_tissue_seu_filtered[["percent.mt"]] = PercentageFeatureSet(lung_tissue_seu_filtered, pattern = "^MT-")
 #QC visualization 
@@ -478,6 +478,13 @@ ggplot(counts, aes(x = factor(State), y = Percentage, fill = Stages)) +
   labs(x = "Trajectory branch", y = "Percentage", fill = "Stages") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+save(immune_subset, file="GSE131907_immune_subset.RData")
+
+
+
 
 # EP cells UMAP visualization
 
