@@ -513,6 +513,75 @@ DimPlot(epithelial_seu, reduction = "umap", group.by = "rename.Tissue.origins", 
   scale_color_manual(values = selected_colors[1:3]) + 
   theme(plot.title = element_text(hjust = 0.5))
 
+epithelial_matrix = as.matrix(epithelial_seu@assays$RNA$counts)
+dim(epithelial_matrix)
+
+epithelial_ref_genome = ref_genome[rownames(epithelial_matrix),]
+epithelial_ref_genome$gene_short_name = rownames(epithelial_ref_genome)
+
+epithelial_cell_annotation = epithelial_seu@meta.data
+
+epithelial_fd <- new("AnnotatedDataFrame", data = epithelial_ref_genome)
+epithelial_pd = new("AnnotatedDataFrame", data = epithelial_cell_annotation)
+
+epithelial_cds =  newCellDataSet(as(epithelial_matrix, "sparseMatrix"),
+                              phenoData = epithelial_pd, featureData = epithelial_fd,
+                              expressionFamily = negbinomial.size())
+
+epithelial_cds = estimateSizeFactors(epithelial_cds)
+epithelial_cds = estimateDispersions(epithelial_cds)
+
+epithelial_express_genes = VariableFeatures(epithelial_seu)
+epithelial_cds = setOrderingFilter(epithelial_cds, epithelial_express_genes)
+plot_ordering_genes(epithelial_cds)
+
+epithelial_cds = reduceDimension(epithelial_cds, max_components = 2, method = "DDRTree")
+
+epithelial_cds <- orderCells(epithelial_cds)
+
+plot_cell_trajectory(epithelial_cds, color_by = "State") + 
+  ggtitle("Epithelial cells Trajectory") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+epithelial_tj_1 = plot_cell_trajectory(epithelial_cds, color_by = "rename.Tissue.origins")+ #, cell_size = 4) + 
+  scale_color_manual(values = c("turquoise", "#FFD92F", "#A6CEE3")) + facet_wrap(~rename.Tissue.origins)+
+  guides(color = guide_legend(title = "Stage", nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") + 
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5, size = 18),
+        legend.title = element_text(size = 18, face = "bold"), 
+        legend.text = element_text(size = 18, face = "bold"),
+        axis.title.x = element_text(size = 18, face = "bold"),
+        axis.text.x = element_text(size = 18, face = "bold"),
+        axis.title.y = element_text(size = 18, face = "bold"),
+        axis.text.y = element_text(size = 18, face = "bold"),
+        strip.text = element_text(size = 18, face = "bold")
+  )
+
+epithelial_tj_2 = plot_cell_trajectory(epithelial_cds, color_by = "Stages")+ 
+  scale_color_manual(values = c("#66C2A5","#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F","#A6CEE3")) +facet_wrap(~Stages)+
+  guides(color = guide_legend(nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5, size = 18),
+        legend.title = element_text(size = 18, face = "bold"), 
+        legend.text = element_text(size = 18, face = "bold"),
+        axis.title.x = element_text(size = 18, face = "bold"),
+        axis.text.x = element_text(size = 18, face = "bold"),
+        axis.title.y = element_text(size = 18, face = "bold"),
+        axis.text.y = element_text(size = 18, face = "bold"),
+        strip.text = element_text(size = 18, face = "bold")
+  )
+
+p2 <- ggarrange(epithelial_tj_1, epithelial_tj_2, ncol = 2)
+p2_annotated <- annotate_figure(
+  p2,
+  top = text_grob("Epithelial cell trajectory by stages", 
+                  face = "bold", size = 18, vjust = 2)) +
+  theme(
+    plot.margin = margin(t = 5, r = 5, b = 15, l = 5)  # 单位默认为 "pt"
+  )
+p2_annotated
 
 # Epithelial Malignant cells only
 
