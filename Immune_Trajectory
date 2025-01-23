@@ -1,0 +1,386 @@
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(Seurat)
+library(stringr)
+library(ggplot2)
+library(ggpubr)
+library(pals)
+library(gplots)
+library(RColorBrewer)
+library(tidyverse)
+library(ComplexHeatmap)
+library(patchwork)
+library(magick)
+library(ggimage)
+library(igraph)
+
+devtools::load_all("C:\\Program Files\\R\\R-4.3.2\\monocle")
+
+load("GSE131907_immune_subset.RData")
+ref_genome = readRDS("input/refgenome_example.Rds")
+
+as.data.frame(immune_subset@meta.data) %>%
+  group_by(Cell_type) %>%
+  summarise(n=n())
+
+
+theme = theme(legend.position = "bottom",
+              plot.title = element_text(hjust = 0.5, size = 18),
+              legend.title = element_text(size = 18, face = "bold"), 
+              legend.text = element_text(size = 18, face = "bold"),
+              axis.title.x = element_text(size = 18, face = "bold"),
+              axis.text.x = element_text(size = 18, face = "bold"),
+              axis.title.y = element_text(size = 18, face = "bold"),
+              axis.text.y = element_text(size = 18, face = "bold"),
+              strip.text = element_text(size = 18, face = "bold"))
+
+
+# B lymphocytes  
+B_cells <- immune_subset@meta.data[immune_subset@meta.data$Cell_type == "B lymphocytes", ]$Index
+immune_subset_B <- immune_subset[ ,B_cells]
+immune_subset_B
+
+as.data.frame(immune_subset_B@meta.data) %>%
+  group_by(rename.Tissue.origins) %>%
+  summarise(n=n())
+
+immune_subset_B_matrix = as.matrix(immune_subset_B@assays$RNA$counts)
+dim(immune_subset_B_matrix)
+
+immune_subset_B_ref_genome = ref_genome[rownames(immune_subset_B_matrix),]
+immune_subset_B_ref_genome$gene_short_name = rownames(immune_subset_B_ref_genome)
+
+immune_subset_B_cell_annotation = immune_subset_B@meta.data
+
+immune_subset_B_fd <- new("AnnotatedDataFrame", data = immune_subset_B_ref_genome)
+immune_subset_B_pd = new("AnnotatedDataFrame", data = immune_subset_B_cell_annotation)
+
+immune_subset_B_cds =  newCellDataSet(as(immune_subset_B_matrix, "sparseMatrix"),
+                                      phenoData = immune_subset_B_pd, featureData = immune_subset_B_fd,
+                                      expressionFamily = negbinomial.size())
+
+immune_subset_B_cds = estimateSizeFactors(immune_subset_B_cds)
+immune_subset_B_cds = estimateDispersions(immune_subset_B_cds)
+
+immune_subset_B_express_genes = VariableFeatures(immune_subset_B)
+immune_subset_B_cds = setOrderingFilter(immune_subset_B_cds, immune_subset_B_express_genes)
+plot_ordering_genes(immune_subset_B_cds)
+
+immune_subset_B_cds = reduceDimension(immune_subset_B_cds, max_components = 2, method = "DDRTree")
+
+immune_subset_B_cds <- orderCells(immune_subset_B_cds)
+
+plot_immune_subset_B_cds = plot_cell_trajectory(immune_subset_B_cds, color_by = "State") + 
+  ggtitle("Immune cells Trajectory") +
+  theme(plot.title = element_text(hjust = 0.5))
+plot_immune_subset_B_cds
+
+
+
+immune_B_tj_1 = plot_cell_trajectory(immune_subset_B_cds, color_by = "rename.Tissue.origins")+ #, cell_size = 4) + 
+  scale_color_manual(values = c("turquoise", "#FFD92F")) + facet_wrap(~rename.Tissue.origins)+
+  guides(color = guide_legend(title = "Stage", nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") + 
+  theme
+
+immune_B_tj_2 = plot_cell_trajectory(immune_subset_B_cds, color_by = "Stages")+ 
+  scale_color_manual(values = c("#66C2A5","#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F")) +facet_wrap(~Stages)+
+  guides(color = guide_legend(nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") +
+  theme
+
+p_B <- ggarrange(immune_B_tj_1, immune_B_tj_2, ncol = 2)
+p_B_annotated <- annotate_figure(
+  p_B,
+  top = text_grob("B lymphocytes cell trajectory by stages", 
+                  face = "bold", size = 18, vjust = 2)) +
+  theme(
+    plot.margin = margin(t = 5, r = 5, b = 15, l = 5)  # 单位默认为 "pt"
+  )
+p_B_annotated
+
+
+
+
+# MAST cells
+MAST_cells <- immune_subset@meta.data[immune_subset@meta.data$Cell_type == "MAST cells", ]$Index
+immune_subset_MAST <- immune_subset[ ,MAST_cells]
+immune_subset_MAST
+
+as.data.frame(immune_subset_MAST@meta.data) %>%
+  group_by(rename.Tissue.origins) %>%
+  summarise(n=n())
+
+immune_subset_MAST_matrix = as.matrix(immune_subset_MAST@assays$RNA$counts)
+dim(immune_subset_MAST_matrix)
+
+immune_subset_MAST_ref_genome = ref_genome[rownames(immune_subset_MAST_matrix),]
+immune_subset_MAST_ref_genome$gene_short_name = rownames(immune_subset_MAST_ref_genome)
+
+immune_subset_MAST_cell_annotation = immune_subset_MAST@meta.data
+
+immune_subset_MAST_fd <- new("AnnotatedDataFrame", data = immune_subset_MAST_ref_genome)
+immune_subset_MAST_pd = new("AnnotatedDataFrame", data = immune_subset_MAST_cell_annotation)
+
+immune_subset_MAST_cds =  newCellDataSet(as(immune_subset_MAST_matrix, "sparseMatrix"),
+                                         phenoData = immune_subset_MAST_pd, featureData = immune_subset_MAST_fd,
+                                         expressionFamily = negbinomial.size())
+
+immune_subset_MAST_cds = estimateSizeFactors(immune_subset_MAST_cds)
+immune_subset_MAST_cds = estimateDispersions(immune_subset_MAST_cds)
+
+immune_subset_MAST_express_genes = VariableFeatures(immune_subset_MAST)
+immune_subset_MAST_cds = setOrderingFilter(immune_subset_MAST_cds, immune_subset_MAST_express_genes)
+plot_ordering_genes(immune_subset_MAST_cds)
+
+immune_subset_MAST_cds = reduceDimension(immune_subset_MAST_cds, max_components = 2, method = "DDRTree")
+
+immune_subset_MAST_cds <- orderCells(immune_subset_MAST_cds)
+
+plot_immune_subset_MAST_cds = plot_cell_trajectory(immune_subset_MAST_cds, color_by = "State") + 
+  ggtitle("MAST cells Trajectory") +
+  theme(plot.title = element_text(hjust = 0.5))
+plot_immune_subset_MAST_cds
+
+
+
+immune_MAST_tj_1 = plot_cell_trajectory(immune_subset_MAST_cds, color_by = "rename.Tissue.origins")+ #, cell_size = 4) + 
+  scale_color_manual(values = c("turquoise",  "#FFD92F")) + facet_wrap(~rename.Tissue.origins)+
+  guides(color = guide_legend(title = "Stage", nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") + 
+  theme
+
+immune_MAST_tj_2 = plot_cell_trajectory(immune_subset_MAST_cds, color_by = "Stages")+ 
+  scale_color_manual(values = c("#66C2A5","#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F")) +facet_wrap(~Stages)+
+  guides(color = guide_legend(nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") +
+  theme
+
+p_MAST <- ggarrange(immune_MAST_tj_1, immune_MAST_tj_2, ncol = 2)
+p_MAST_annotated <- annotate_figure(
+  p_MAST,
+  top = text_grob("MAST cell trajectory by stages", 
+                  face = "bold", size = 18, vjust = 2)) +
+  theme(plot.margin = margin(t = 5, r = 5, b = 15, l = 5))  # 单位默认为 "pt"
+p_MAST_annotated
+
+
+
+
+# Myeloid cells
+Myeloid_cells <- immune_subset@meta.data[immune_subset@meta.data$Cell_type == "Myeloid cells", ]$Index
+immune_subset_Myeloid <- immune_subset[ ,Myeloid_cells]
+immune_subset_Myeloid
+
+
+as.data.frame(immune_subset_Myeloid@meta.data) %>%
+  group_by(rename.Tissue.origins) %>%
+  summarise(n=n())
+
+
+immune_subset_Myeloid_matrix = as.matrix(immune_subset_Myeloid@assays$RNA$counts)
+dim(immune_subset_Myeloid_matrix)
+
+immune_subset_Myeloid_ref_genome = ref_genome[rownames(immune_subset_Myeloid_matrix),]
+immune_subset_Myeloid_ref_genome$gene_short_name = rownames(immune_subset_Myeloid_ref_genome)
+
+immune_subset_Myeloid_cell_annotation = immune_subset_Myeloid@meta.data
+
+immune_subset_Myeloid_fd <- new("AnnotatedDataFrame", data = immune_subset_Myeloid_ref_genome)
+immune_subset_Myeloid_pd = new("AnnotatedDataFrame", data = immune_subset_Myeloid_cell_annotation)
+
+immune_subset_Myeloid_cds =  newCellDataSet(as(immune_subset_Myeloid_matrix, "sparseMatrix"),
+                                            phenoData = immune_subset_Myeloid_pd, featureData = immune_subset_Myeloid_fd,
+                                            expressionFamily = negbinomial.size())
+
+immune_subset_Myeloid_cds = estimateSizeFactors(immune_subset_Myeloid_cds)
+immune_subset_Myeloid_cds = estimateDispersions(immune_subset_Myeloid_cds)
+
+immune_subset_Myeloid_express_genes = VariableFeatures(immune_subset_Myeloid)
+immune_subset_Myeloid_cds = setOrderingFilter(immune_subset_Myeloid_cds, immune_subset_Myeloid_express_genes)
+plot_ordering_genes(immune_subset_Myeloid_cds)
+
+immune_subset_Myeloid_cds = reduceDimension(immune_subset_Myeloid_cds, max_components = 2, method = "DDRTree")
+
+immune_subset_Myeloid_cds <- orderCells(immune_subset_Myeloid_cds)
+
+plot_immune_subset_Myeloid_cds = plot_cell_trajectory(immune_subset_Myeloid_cds, color_by = "State") + 
+  ggtitle("Myeloid cells Trajectory") +
+  theme(plot.title = element_text(hjust = 0.5))
+plot_immune_subset_Myeloid_cds
+
+
+
+immune_Myeloid_tj_1 = plot_cell_trajectory(immune_subset_Myeloid_cds, color_by = "rename.Tissue.origins")+ #, cell_size = 4) + 
+  scale_color_manual(values = c("turquoise", "#FFD92F", "#A6CEE3")) + facet_wrap(~rename.Tissue.origins)+
+  guides(color = guide_legend(title = "Stage", nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") + 
+  theme
+
+immune_Myeloid_tj_2 = plot_cell_trajectory(immune_subset_Myeloid_cds, color_by = "Stages")+ 
+  scale_color_manual(values = c("#66C2A5","#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F","#A6CEE3")) +facet_wrap(~Stages)+
+  guides(color = guide_legend(nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") +
+  theme
+
+p_Myeloid <- ggarrange(immune_Myeloid_tj_1, immune_Myeloid_tj_2, ncol = 2)
+p_Myeloid_annotated <- annotate_figure(
+  p_Myeloid,
+  top = text_grob("Myeloid cell trajectory by stages", 
+                  face = "bold", size = 18, vjust = 2)) +
+  theme(plot.margin = margin(t = 5, r = 5, b = 15, l = 5))  # 单位默认为 "pt"
+p_Myeloid_annotated
+
+
+
+
+
+# NK cells
+NK_cells <- immune_subset@meta.data[immune_subset@meta.data$Cell_type == "NK cells", ]$Index
+immune_subset_NK <- immune_subset[ ,NK_cells]
+immune_subset_NK
+
+
+as.data.frame(immune_subset_NK@meta.data) %>%
+  group_by(rename.Tissue.origins) %>%
+  summarise(n=n())
+
+
+immune_subset_NK_matrix = as.matrix(immune_subset_NK@assays$RNA$counts)
+dim(immune_subset_NK_matrix)
+
+immune_subset_NK_ref_genome = ref_genome[rownames(immune_subset_NK_matrix),]
+immune_subset_NK_ref_genome$gene_short_name = rownames(immune_subset_NK_ref_genome)
+
+immune_subset_NK_cell_annotation = immune_subset_NK@meta.data
+
+immune_subset_NK_fd <- new("AnnotatedDataFrame", data = immune_subset_NK_ref_genome)
+immune_subset_NK_pd = new("AnnotatedDataFrame", data = immune_subset_NK_cell_annotation)
+
+immune_subset_NK_cds =  newCellDataSet(as(immune_subset_NK_matrix, "sparseMatrix"),
+                                       phenoData = immune_subset_NK_pd, featureData = immune_subset_NK_fd,
+                                       expressionFamily = negbinomial.size())
+
+immune_subset_NK_cds = estimateSizeFactors(immune_subset_NK_cds)
+immune_subset_NK_cds = estimateDispersions(immune_subset_NK_cds)
+
+immune_subset_NK_express_genes = VariableFeatures(immune_subset_NK)
+immune_subset_NK_cds = setOrderingFilter(immune_subset_NK_cds, immune_subset_NK_express_genes)
+plot_ordering_genes(immune_subset_NK_cds)
+
+immune_subset_NK_cds = reduceDimension(immune_subset_NK_cds, max_components = 2, method = "DDRTree")
+
+immune_subset_NK_cds <- orderCells(immune_subset_NK_cds)
+
+plot_immune_subset_NK_cds = plot_cell_trajectory(immune_subset_NK_cds, color_by = "State") + 
+  ggtitle("NK cells Trajectory") +
+  theme(plot.title = element_text(hjust = 0.5))
+plot_immune_subset_NK_cds
+
+
+
+immune_NK_tj_1 = plot_cell_trajectory(immune_subset_NK_cds, color_by = "rename.Tissue.origins")+ #, cell_size = 4) + 
+  scale_color_manual(values = c("turquoise", "#FFD92F", "#A6CEE3")) + facet_wrap(~rename.Tissue.origins)+
+  guides(color = guide_legend(title = "Stage", nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") + 
+  theme
+
+immune_NK_tj_2 = plot_cell_trajectory(immune_subset_NK_cds, color_by = "Stages")+ 
+  scale_color_manual(values = c("#66C2A5","#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F","#A6CEE3")) +facet_wrap(~Stages)+
+  guides(color = guide_legend(nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") +
+  theme
+
+p_NK <- ggarrange(immune_NK_tj_1, immune_NK_tj_2, ncol = 2)
+p_NK_annotated <- annotate_figure(
+  p_NK,
+  top = text_grob("NK cell trajectory by stages", 
+                  face = "bold", size = 18, vjust = 2)) +
+  theme(plot.margin = margin(t = 5, r = 5, b = 15, l = 5))  # 单位默认为 "pt"
+p_NK_annotated
+
+
+
+
+
+# T lymphocytes
+T_cells <- immune_subset@meta.data[immune_subset@meta.data$Cell_type == "T lymphocytes", ]$Index
+immune_subset_T <- immune_subset[ ,T_cells]
+immune_subset_T
+
+
+as.data.frame(immune_subset_T@meta.data) %>%
+  group_by(rename.Tissue.origins) %>%
+  summarise(n=n())
+
+
+
+immune_subset_T_matrix = as.matrix(immune_subset_T@assays$RNA$counts)
+dim(immune_subset_T_matrix)
+
+immune_subset_T_ref_genome = ref_genome[rownames(immune_subset_T_matrix),]
+immune_subset_T_ref_genome$gene_short_name = rownames(immune_subset_T_ref_genome)
+
+immune_subset_T_cell_annotation = immune_subset_T@meta.data
+
+immune_subset_T_fd <- new("AnnotatedDataFrame", data = immune_subset_T_ref_genome)
+immune_subset_T_pd = new("AnnotatedDataFrame", data = immune_subset_T_cell_annotation)
+
+immune_subset_T_cds =  newCellDataSet(as(immune_subset_T_matrix, "sparseMatrix"),
+                                      phenoData = immune_subset_T_pd, featureData = immune_subset_T_fd,
+                                      expressionFamily = negbinomial.size())
+
+immune_subset_T_cds = estimateSizeFactors(immune_subset_T_cds)
+immune_subset_T_cds = estimateDispersions(immune_subset_T_cds)
+
+immune_subset_T_express_genes = VariableFeatures(immune_subset_T)
+immune_subset_T_cds = setOrderingFilter(immune_subset_T_cds, immune_subset_T_express_genes)
+plot_ordering_genes(immune_subset_T_cds)
+
+immune_subset_T_cds = reduceDimension(immune_subset_T_cds, max_components = 2, method = "DDRTree")
+
+immune_subset_T_cds <- orderCells(immune_subset_T_cds)
+
+plot_immune_subset_T_cds = plot_cell_trajectory(immune_subset_T_cds, color_by = "State") + 
+  ggtitle("T cells Trajectory") +
+  theme(plot.title = element_text(hjust = 0.5))
+plot_immune_subset_T_cds
+
+
+
+
+immune_T_tj_1 = plot_cell_trajectory(immune_subset_T_cds, color_by = "rename.Tissue.origins")+ #, cell_size = 4) + 
+  scale_color_manual(values = c("turquoise", "#FFD92F", "#A6CEE3")) + facet_wrap(~rename.Tissue.origins)+
+  guides(color = guide_legend(title = "Stage", nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") + 
+  theme
+
+immune_T_tj_2 = plot_cell_trajectory(immune_subset_T_cds, color_by = "Stages")+ 
+  scale_color_manual(values = c("#66C2A5","#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F","#A6CEE3")) +facet_wrap(~Stages)+
+  guides(color = guide_legend(nrow = 1, override.aes = list(size = 3))) +
+  ggtitle("") +
+  theme
+
+
+
+
+
+p_T <- ggarrange(immune_T_tj_1, immune_T_tj_2, ncol = 2)
+p_T_annotated <- annotate_figure(
+  p_T,
+  top = text_grob("T cell trajectory by stages", 
+                  face = "bold", size = 18, vjust = 2)) +
+  theme(plot.margin = margin(t = 5, r = 5, b = 15, l = 5))  # 单位默认为 "pt"
+p_T_annotated
+
+
+
+
+
+
+
+
+
+
+
